@@ -30,6 +30,7 @@ using namespace FakeVim::Internal;
 #include <QSettings>
 #include <QStyle>
 #include <QStyleHints>
+#include <QVariantMap>
 #include <QtPlugin>
 
 #define EDITOR(s) (m_textEdit ? m_textEdit->s : m_plainTextEdit->s)
@@ -754,7 +755,7 @@ QVariant ItemFakeVimLoader::icon() const
 
 void ItemFakeVimLoader::setEnabled(bool enabled)
 {
-    m_enabled = enabled;
+    ItemLoaderInterface::setEnabled(enabled);
     updateCurrentlyEnabledState();
 }
 
@@ -811,7 +812,7 @@ void ItemFakeVimLoader::updateCurrentlyEnabledState()
     if ( qobject_cast<QGuiApplication*>(qApp) == nullptr )
         return;
 
-    const bool enable = m_enabled && m_reallyEnabled;
+    const bool enable = isEnabled() && m_reallyEnabled;
     if (m_currentlyEnabled == enable)
         return;
 

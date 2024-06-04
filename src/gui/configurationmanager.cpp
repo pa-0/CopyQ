@@ -173,9 +173,12 @@ void ConfigurationManager::initPluginWidgets(ItemFactory *itemFactory)
     m_tabItems->setItemsMovable(true);
 
     for ( const auto &loader : itemFactory->loaders() ) {
+        if ( loader->name().isEmpty() )
+            continue;
+
         ItemOrderList::ItemPtr pluginItem(new PluginItem(loader));
         const QIcon icon = getIcon(loader->icon());
-        const auto state = itemFactory->isLoaderEnabled(loader)
+        const auto state = loader->isEnabled()
                 ? ItemOrderList::Checked
                 : ItemOrderList::Unchecked;
         m_tabItems->appendItem( loader->name(), icon, pluginItem, state );
@@ -285,6 +288,7 @@ void ConfigurationManager::initOptions()
     bind<Config::tray_tab>(m_tabTray->comboBoxMenuTab->lineEdit());
 
     /* other options */
+    bind<Config::item_data_threshold>();
     bind<Config::command_history_size>();
 #ifdef HAS_MOUSE_SELECTIONS
     /* X11 clipboard selection monitoring and synchronization */
@@ -327,7 +331,7 @@ void ConfigurationManager::initOptions()
     bind<Config::window_key_press_time_ms>();
     bind<Config::window_wait_for_modifier_released_ms>();
 
-    bind<Config::change_clipboard_owner_delay_ms>();
+    bind<Config::update_clipboard_owner_delay_ms>();
 
     bind<Config::style>();
 
@@ -542,7 +546,8 @@ void ConfigurationManager::apply(AppConfig *appConfig)
 
     for (int i = 0; i < m_tabItems->itemCount(); ++i) {
         const QString loaderId = m_tabItems->data(i).toString();
-        Q_ASSERT(!loaderId.isEmpty());
+        if ( loaderId.isEmpty() )
+            continue;
 
         pluginPriority.append(loaderId);
 

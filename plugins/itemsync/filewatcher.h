@@ -30,6 +30,11 @@ extern const QLatin1String mimePrivatePrefix;
 extern const QLatin1String mimeOldBaseName;
 extern const QLatin1String mimeHashPrefix;
 
+enum class UpdateType {
+    Inserted,
+    Changed,
+};
+
 struct FileFormat {
     bool isValid() const { return !extensions.isEmpty(); }
     QStringList extensions;
@@ -40,6 +45,11 @@ struct FileFormat {
 using BaseNameExtensionsList = QList<BaseNameExtensions>;
 
 using Hash = QByteArray;
+
+class SyncDataFile;
+QDataStream &operator<<(QDataStream &out, SyncDataFile value);
+QDataStream &operator>>(QDataStream &in, SyncDataFile &value);
+void registerSyncDataFileConverter();
 
 class FileWatcher final : public QObject {
 public:
@@ -56,8 +66,15 @@ public:
 
     static Hash calculateHash(const QByteArray &bytes);
 
-    FileWatcher(const QString &path, const QStringList &paths, QAbstractItemModel *model,
-                int maxItems, const QList<FileFormat> &formatSettings, QObject *parent = nullptr);
+    FileWatcher(
+        const QString &path,
+        const QStringList &paths,
+        QAbstractItemModel *model,
+        int maxItems,
+        const QList<FileFormat> &formatSettings,
+        int itemDataThreshold,
+        QObject *parent = nullptr
+    );
 
     const QString &path() const { return m_path; }
 
@@ -98,9 +115,10 @@ private:
 
     QList<QPersistentModelIndex> indexList(int first, int last);
 
-    void saveItems(int first, int last);
+    void saveItems(int first, int last, UpdateType updateType);
 
-    bool renameMoveCopy(const QDir &dir, const QList<QPersistentModelIndex> &indexList);
+    bool renameMoveCopy(
+        const QDir &dir, const QList<QPersistentModelIndex> &indexList, UpdateType updateType);
 
     void updateDataAndWatchFile(
             const QDir &dir, const BaseNameExtensions &baseNameWithExts,
@@ -121,6 +139,7 @@ private:
     QList<QPersistentModelIndex> m_batchIndexData;
     BaseNameExtensionsList m_fileList;
     int m_lastBatchIndex = -1;
+    int m_itemDataThreshold = -1;
 };
 
 #endif // FILEWATCHER_H

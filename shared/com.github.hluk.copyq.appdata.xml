@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Copyright 2020 Lukáš Holeček <hluk@email.cz> -->
+<!-- Copyright 2024 Lukáš Holeček <hluk@email.cz> -->
 <component type="desktop">
     <id>com.github.hluk.copyq.desktop</id>
     <metadata_license>CC0-1.0</metadata_license>
@@ -26,6 +26,8 @@
     <url type="translate">https://hosted.weblate.org/engage/copyq/</url>
 
     <releases>
+        <release version="8.0.0" date="2024-03-14" />
+        <release version="7.1.0" date="2023-09-03" />
         <release version="7.0.0" date="2023-04-02" />
         <release version="6.4.0" date="2023-01-19" />
         <release version="6.3.2" date="2022-09-26" />
@@ -88,4 +90,6 @@
     <developer_name>Lukas Holecek</developer_name>
 
     <content_rating type="oars-1.0" />
+
+    <launchable type="desktop-id">com.github.hluk.copyq.desktop</launchable>
 </component>

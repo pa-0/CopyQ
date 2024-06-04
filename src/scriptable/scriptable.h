@@ -16,6 +16,7 @@
 #include "platform/platformnativeinterface.h"
 
 class Action;
+class ScriptableByteArray;
 class ClipboardBrowser;
 class ItemFactory;
 class NetworkReply;
@@ -50,17 +51,18 @@ class Scriptable final : public QObject
     Q_PROPERTY(QJSValue mimeShortcut READ getMimeShortcut CONSTANT)
     Q_PROPERTY(QJSValue mimeColor READ getMimeColor CONSTANT)
     Q_PROPERTY(QJSValue mimeOutputTab READ getMimeOutputTab CONSTANT)
+    Q_PROPERTY(QJSValue mimeDisplayItemInMenu READ getMimeDisplayItemInMenu CONSTANT)
 
     Q_PROPERTY(QJSValue plugins READ getPlugins CONSTANT)
 
     Q_PROPERTY(QJSValue _copyqUncaughtException READ uncaughtException WRITE setUncaughtException)
     Q_PROPERTY(QJSValue _copyqHasUncaughtException READ hasUncaughtException)
-    Q_PROPERTY(QJSValue _initItemSelection READ getUndefined WRITE initItemSelection)
 
 public:
-    explicit Scriptable(
+    Scriptable(
             QJSEngine *engine,
             ScriptableProxy *proxy,
+            ItemFactory *factory = nullptr,
             QObject *parent = nullptr);
 
     enum class Abort {
@@ -74,6 +76,7 @@ public:
     QJSValue argument(int index) const;
 
     QJSValue newByteArray(const QByteArray &bytes) const;
+    QJSValue newByteArray(ScriptableByteArray *ba) const;
 
     QByteArray fromString(const QString &value) const;
     QVariant toVariant(const QJSValue &value);
@@ -134,6 +137,7 @@ public:
     QJSValue getMimeShortcut() const { return mimeShortcut; }
     QJSValue getMimeColor() const { return mimeColor; }
     QJSValue getMimeOutputTab() const { return mimeOutputTab; }
+    QJSValue getMimeDisplayItemInMenu() const { return mimeDisplayItemInMenu; }
 
     QJSValue getPlugins();
 
@@ -150,6 +154,13 @@ public:
     void abortEvaluation(Abort abort = Abort::AllEvaluations);
 
 public slots:
+    QJSValue ByteArray() const;
+    QJSValue File() const;
+    QJSValue TemporaryFile() const;
+    QJSValue Dir() const;
+    QJSValue ItemSelection() const;
+    QJSValue Settings() const;
+
     QJSValue version();
     QJSValue help();
 
@@ -295,6 +306,7 @@ public slots:
     QJSValue execute();
 
     QJSValue currentWindowTitle();
+    QJSValue currentClipboardOwner();
 
     QJSValue dialog();
 
@@ -371,10 +383,18 @@ public slots:
     void monitorClipboard();
     void provideClipboard();
     void provideSelection();
+    QJSValue isClipboardMonitorRunning();
 
     QJSValue clipboardFormatsToSave();
 
     QJSValue styles();
+
+    void onItemsAdded() {}
+    void onItemsRemoved() {}
+    void onItemsChanged() {}
+    void onTabSelected() {}
+    void onItemsLoaded() {}
+    void collectScriptOverrides();
 
 signals:
     void finished();
@@ -386,6 +406,7 @@ private:
     void onMonitorClipboardChanged(const QVariantMap &data, ClipboardOwnership ownership);
     void onMonitorClipboardUnchanged(const QVariantMap &data);
     void onSynchronizeSelection(ClipboardMode sourceMode, uint sourceTextHash, uint targetTextHash);
+    void onFetchCurrentClipboardOwner(QString *title);
 
     bool sourceScriptCommands();
     void callDisplayFunctions(QJSValueList displayFunctions);
@@ -413,7 +434,6 @@ private:
     bool runCommands(CommandType::CommandType type);
     bool canExecuteCommand(const Command &command);
     bool canExecuteCommandFilter(const QString &matchCommand);
-    bool canAccessClipboard() const;
     bool verifyClipboardAccess();
     void provideClipboard(ClipboardMode mode);
 
@@ -446,11 +466,11 @@ private:
     NetworkReply *networkGetHelper();
     NetworkReply *networkPostHelper();
 
-    QJSValue getUndefined () { return {}; }
-    QJSValue initItemSelection(const QJSValue &obj);
+    QJSValue newQObject(QObject *obj, const QJSValue &prototype) const;
 
     ScriptableProxy *m_proxy;
     QJSEngine *m_engine;
+    ItemFactory *m_factory;
     QJSValue m_temporaryFileClass;
     QString m_inputSeparator;
     QJSValue m_input;
@@ -488,6 +508,13 @@ private:
     QJSValue m_createFn;
     QJSValue m_createFnB;
     QJSValue m_createProperty;
+
+    QJSValue m_byteArrayPrototype;
+    QJSValue m_filePrototype;
+    QJSValue m_temporaryFilePrototype;
+    QJSValue m_dirPrototype;
+    QJSValue m_itemSelectionPrototype;
+    QJSValue m_settingsPrototype;
 };
 
 class NetworkReply final : public QObject {
@@ -532,14 +559,14 @@ class ScriptablePlugins final : public QObject {
     Q_OBJECT
 
 public:
-    explicit ScriptablePlugins(Scriptable *scriptable);
+    ScriptablePlugins(Scriptable *scriptable, ItemFactory *factory);
 
 public slots:
     QJSValue load(const QString &name);
 
 private:
-    ItemFactory *m_factory = nullptr;
     Scriptable *m_scriptable;
+    ItemFactory *m_factory;
     QMap<QString, QJSValue> m_plugins;
 };
 

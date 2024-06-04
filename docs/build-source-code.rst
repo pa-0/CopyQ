@@ -54,7 +54,7 @@ On **Ubuntu** you can install all build dependencies with:
 
 Fedora / RHEL / Centos
 ^^^^^^^^^^^^^^^^^^^^^^
-On **Fedora** and derivatives you can install all build dependencies with:
+On **Fedora** and derivatives you can install all build dependencies with Qt 5:
 
 ::
 
@@ -74,6 +74,28 @@ On **Fedora** and derivatives you can install all build dependencies with:
       qt5-qttools-devel \
       qt5-qtwayland-devel \
       qt5-qtx11extras-devel \
+      wayland-devel
+
+To build with Qt 6:
+
+::
+
+    sudo yum install \
+      cmake \
+      extra-cmake-modules \
+      gcc-c++ \
+      git \
+      kf6-knotifications-devel \
+      kf6-kstatusnotifieritem-devel \
+      libSM-devel \
+      libXfixes-devel \
+      libXtst-devel \
+      qt6-qtbase-devel \
+      qt6-qtbase-private-devel \
+      qt6-qtdeclarative-devel \
+      qt6-qtsvg-devel \
+      qt6-qttools-devel \
+      qt6-qtwayland-devel \
       wayland-devel
 
 Build and Install
@@ -136,7 +158,7 @@ On OS X, required Qt 5 libraries and utilities can be easily installed with `Hom
     #     brew untap --force copyq/kde
     # and re-run the above "brew tap" command
 
-    brew install qt5 copyq/kde/kf5-knotifications
+    brew install qt6 copyq/kde/kf6-knotifications copyq/kde/kf6-kstatusnotifieritem
 
 Build with the following commands:
 

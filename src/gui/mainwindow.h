@@ -12,11 +12,10 @@
 #include "platform/platformnativeinterface.h"
 
 #include <QMainWindow>
-#include <QModelIndex>
+#include <QPersistentModelIndex>
 #include <QPointer>
-#include <QSystemTrayIcon>
 #include <QTimer>
-#include <QVector>
+#include <QtContainerFwd>
 
 class Action;
 class ActionDialog;
@@ -34,15 +33,16 @@ class Tabs;
 class Theme;
 class TrayMenu;
 class ToolBar;
+class QModelIndex;
 struct MainWindowOptions;
 struct NotificationButton;
 
 Q_DECLARE_METATYPE(QPersistentModelIndex)
-Q_DECLARE_METATYPE(QList<QPersistentModelIndex>)
 
 #if QT_VERSION >= QT_VERSION_CHECK(6,0,0)
 using NativeEventResult = qintptr;
 #else
+Q_DECLARE_METATYPE(QList<QPersistentModelIndex>)
 using NativeEventResult = long;
 #endif
 
@@ -411,6 +411,9 @@ public:
     void setItemPreviewVisible(bool visible);
     bool isItemPreviewVisible() const;
 
+    void setScriptOverrides(const QVector<int> &overrides, int actionId);
+    bool isScriptOverridden(int id) const;
+
 signals:
     /** Request clipboard change. */
     void changeClipboard(const QVariantMap &data, ClipboardMode mode);
@@ -445,7 +448,7 @@ private:
     ClipboardBrowserPlaceholder *getPlaceholderForTrayMenu();
     void filterMenuItems(const QString &searchText);
     void filterTrayMenuItems(const QString &searchText);
-    void trayActivated(QSystemTrayIcon::ActivationReason reason);
+    void trayActivated(int reason);
     void onMenuActionTriggered(const QVariantMap &data, bool omitPaste);
     void onTrayActionTriggered(const QVariantMap &data, bool omitPaste);
     void findNextOrPrevious();
@@ -626,6 +629,9 @@ private:
     const Theme &theme() const;
 
     Action *runScript(const QString &script, const QVariantMap &data = QVariantMap());
+    bool runEventHandlerScript(const QString &script, const QVariantMap &data);
+    void runItemHandlerScript(
+        const QString &script, const ClipboardBrowser *browser, int firstRow, int lastRow);
 
     void activateCurrentItemHelper();
     void onItemClicked();
@@ -693,6 +699,10 @@ private:
     bool m_isActiveWindow = false;
     bool m_singleClickActivate = 0;
     bool m_enteringSearchMode = false;
+
+    QVector<int> m_overrides;
+    int m_maxEventHandlerScripts = 10;
+    QPointer<Action> m_actionCollectOverrides;
 };
 
 #endif // MAINWINDOW_H

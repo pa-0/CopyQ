@@ -22,9 +22,11 @@ namespace {
 
 const QIcon iconClipboard() { return getIcon("", IconClipboard); }
 const QIcon iconMenu() { return getIcon("", IconBars); }
-const QIcon iconShortcut() { return getIcon("", IconKeyboard); }
 const QIcon iconScript() { return getIcon("", IconGear); }
 const QIcon iconDisplay() { return getIcon("", IconEye); }
+#ifdef COPYQ_GLOBAL_SHORTCUTS
+const QIcon iconShortcut() { return getIcon("", IconKeyboard); }
+#endif
 
 QStringList serializeShortcuts(const QList<QKeySequence> &shortcuts)
 {
@@ -91,11 +93,11 @@ CommandWidget::CommandWidget(QWidget *parent)
 
     updateWidgets();
 
-#ifdef NO_GLOBAL_SHORTCUTS
+#ifdef COPYQ_GLOBAL_SHORTCUTS
+    ui->toolButtonGlobalShortcut->setIcon(iconShortcut());
+#else
     ui->toolButtonGlobalShortcut->hide();
     ui->shortcutButtonGlobalShortcut->hide();
-#else
-    ui->toolButtonGlobalShortcut->setIcon(iconShortcut());
 #endif
 
     ui->toolButtonAutomatic->setIcon(iconClipboard());
@@ -150,9 +152,11 @@ Command CommandWidget::command() const
 void CommandWidget::setCommand(const Command &c)
 {
     m_internalId = c.internalId;
-    m_isEditable = m_internalId.startsWith(QLatin1String("copyq_"));
+    const bool isEditable = !m_internalId.startsWith(QLatin1String("copyq_"));
 
-    ui->lineEditName->setReadOnly(m_isEditable);
+    ui->scrollAreaWidgetContents->setEnabled(isEditable);
+    ui->commandEdit->setReadOnly(!isEditable);
+    ui->lineEditName->setReadOnly(!isEditable);
     ui->lineEditName->setText(c.name);
     ui->lineEditMatch->setText( c.re.pattern() );
     ui->lineEditWindow->setText( c.wndre.pattern() );
@@ -249,10 +253,8 @@ void CommandWidget::updateWidgets()
 
 void CommandWidget::updateShowAdvanced()
 {
-    const bool canEditAdvanced = m_showAdvanced && !m_isEditable;
-    ui->widgetCommandType->setVisible(canEditAdvanced);
-    ui->tabWidget->setVisible(canEditAdvanced);
-
+    ui->widgetCommandType->setVisible(m_showAdvanced);
+    ui->tabWidget->setVisible(m_showAdvanced);
     ui->labelDescription->setVisible(m_showAdvanced);
 
     // Hide the Advanced tab if there are no visible widgets.

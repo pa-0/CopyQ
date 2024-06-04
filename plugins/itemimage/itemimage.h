@@ -8,6 +8,7 @@
 
 #include <QLabel>
 #include <QPixmap>
+#include <QVariant>
 
 #include <memory>
 
@@ -67,6 +68,8 @@ public:
     QVariant icon() const override { return QVariant(IconCamera); }
 
     QStringList formatsToSave() const override;
+
+    QObject *tests(const TestInterfacePtr &test) const override;
 
     void applySettings(QSettings &settings) override;
 

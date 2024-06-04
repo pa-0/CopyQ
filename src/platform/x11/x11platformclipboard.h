@@ -24,19 +24,20 @@ public:
 
     void setData(ClipboardMode mode, const QVariantMap &dataMap) override;
 
-    const QMimeData *mimeData(ClipboardMode mode) const override;
-
     bool isSelectionSupported() const override { return m_selectionSupported; }
 
+    void setClipboardOwner(const QString &owner) override { m_clipboardOwner = owner; }
+
 protected:
+    const QMimeData *rawMimeData(ClipboardMode mode) const override;
     void onChanged(int mode) override;
 
 private:
     struct ClipboardData {
         QVariantMap newData;
         QVariantMap data;
-        QByteArray owner;
-        QByteArray newOwner;
+        QString owner;
+        QString newOwner;
         QTimer timerEmitChange;
         QStringList formats;
         quint32 newDataTimestamp;
@@ -44,6 +45,7 @@ private:
         bool enabled = true;
         bool cloningData = false;
         bool abortCloning = false;
+        bool ignoreNext = false;
         int retry = 0;
     };
 
@@ -59,6 +61,8 @@ private:
 
     bool m_monitoring = false;
     bool m_selectionSupported = true;
+
+    QString m_clipboardOwner;
 };
 
 #endif // X11PLATFORMCLIPBOARD_H

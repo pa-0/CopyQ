@@ -273,7 +273,7 @@ unlike in GUI, where row numbers start from 1 by default.
 
    Returns true only if clipboard contains MIME type.
 
-   :returns: ``true`` if clipboad contains the format, otherwise ``false``.
+   :returns: ``true`` if clipboard contains the format, otherwise ``false``.
    :rtype: bool
 
 .. js:function:: hasSelectionFormat(mimeType)
@@ -1060,6 +1060,24 @@ unlike in GUI, where row numbers start from 1 by default.
    :returns: Current window title.
    :rtype: string
 
+.. js:function:: String currentClipboardOwner()
+
+   Returns name of the current clipboard owner.
+
+   The default implementation returns `currentWindowTitle()`.
+
+   This is used to set `mimeWindowTitle` format for the clipboard data in
+   automatic commands and filtering by window title.
+
+   Depending on the current system, option `update_clipboard_owner_delay_ms`
+   can introduce a delay before any new owner value return by this function is
+   used. The reason is to avoid using an incorrect clipboard owner from the
+   current window title if the real clipboard owner set the clipboard after or
+   just before hiding its window (like with some password managers).
+
+   :returns: Current clipboard owner name.
+   :rtype: string
+
 .. js:function:: dialog(...)
 
    Shows messages or asks user for input.
@@ -1604,6 +1622,52 @@ unlike in GUI, where row numbers start from 1 by default.
 
        config("style", styleName)
 
+.. js:function:: onItemsAdded()
+
+   Called when items are added to a tab.
+
+   The target tab is returned by `selectedTab()`.
+
+   The new items can be accessed with `selectedItemsData()`,
+   `selectedItemData()`, `selectedItems()` and `ItemSelection().current()`.
+
+.. js:function:: onItemsRemoved()
+
+   Called when items are being removed from a tab.
+
+   The target tab is returned by `selectedTab()`.
+
+   The items scheduled for removal can be accessed with `selectedItemsData()`,
+   `selectedItemData()`, `selectedItems()` and `ItemSelection().current()`.
+
+   If the exit code is non-zero (for example `fail()` is called), items will
+   not be removed. But this can also cause a new items not to be added if the
+   tab is full.
+
+.. js:function:: onItemsChanged()
+
+   Called when data in items change.
+
+   The target tab is returned by `selectedTab()`.
+
+   The modified items can be accessed with `selectedItemsData()`,
+   `selectedItemData()`, `selectedItems()` and `ItemSelection().current()`.
+
+.. js:function:: onTabSelected()
+
+   Called when another tab is opened.
+
+   The newly selected tab is returned by `selectedTab()`.
+
+   The changed items can be accessed with `selectedItemsData()`,
+   `selectedItemData()`, `selectedItems()` and `ItemSelection().current()`.
+
+.. js:function:: onItemsLoaded()
+
+   Called when all items are loaded into a tab.
+
+   The target tab is returned by `selectedTab()`.
+
 Types
 -----
 
@@ -1775,7 +1839,7 @@ Types
        for (var index = 0; index < sel.length; ++index) {
            var item = sel.itemAtIndex(index);
            item[mimeItemNotes] = 'Contains needle';
-           sel.setItemAtIndex(item);
+           sel.setItemAtIndex(index, item);
        }
 
    Example - selection with new items only:
@@ -2160,6 +2224,13 @@ These MIME types values are assigned to global variables prefixed with
        removeData(mimeOutputTab)
 
    Valid only in automatic commands.
+
+.. js:data:: mimeDisplayItemInMenu
+
+   Indicates if display commands run for a menu. Value: 'application/x-copyq-display-item-in-menu'.
+
+   Set to "1" for display commands if the item data is related to a menu item
+   instead of an item list.
 
 Selected Items
 --------------

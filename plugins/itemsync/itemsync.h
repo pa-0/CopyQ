@@ -6,6 +6,7 @@
 #include "gui/icons.h"
 #include "item/itemwidgetwrapper.h"
 
+#include <QVariantMap>
 #include <QWidget>
 
 #include <memory>
@@ -49,7 +50,7 @@ public:
 
     bool canRemoveItems(const QList<QModelIndex> &indexList, QString *error) override;
 
-    void itemsRemovedByUser(const QList<QModelIndex> &indexList) override;
+    void itemsRemovedByUser(const QList<QPersistentModelIndex> &indexList) override;
 
     QVariantMap copyItem(const QAbstractItemModel &model, const QVariantMap &itemData) override;
 
@@ -158,6 +159,7 @@ private:
     ItemSyncTabPaths m_tabPaths;
     QStringList m_tabPathsSaved;
     QList<FileFormat> m_formatSettings;
+    int m_itemDataThreshold = -1;
 };
 
 #endif // ITEMSYNC_H

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.13)
 project(copyq)
 
 if (APPLE)
@@ -8,11 +8,7 @@ else()
 endif()
 
 # C++17
-if (${CMAKE_MAJOR_VERSION}.${CMAKE_MINOR_VERSION} GREATER 3.1)
-    set(CMAKE_CXX_STANDARD 17)
-else()
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17")
-endif()
+set(CMAKE_CXX_STANDARD 17)
 
 if(CMAKE_BUILD_TYPE MATCHES Debug)
     set(COPYQ_DEBUG ON)
@@ -42,6 +38,7 @@ if (UNIX AND NOT APPLE)
     set(BASH_COMPLETION_INSTALL_PREFIX "${DATA_INSTALL_PREFIX}/bash-completion/completions/" CACHE PATH "Install path for bash completions")
     set(ICON_NAME "copyq" CACHE STRING "Name for icon files")
     set(COPYQ_AUTOSTART_COMMAND "" CACHE STRING "Autostart command")
+    OPTION(COPYQ_AUTOSTART "Enable autostart option" ON)
 endif()
 
 set(CMAKE_AUTOMOC ON)
@@ -110,6 +107,7 @@ if (PEDANTIC)
             -Wno-double-promotion
             -Wno-exit-time-destructors
             -Wno-extra-semi-stmt
+            -Wno-inconsistent-missing-destructor-override
             -Wno-redundant-parens
             -Wno-shadow-field
             -Wno-shadow-field-in-constructor
@@ -191,6 +189,10 @@ if (UNIX AND NOT APPLE)
     add_definitions( -DCOPYQ_TRANSLATION_PREFIX="${TRANSLATION_INSTALL_PREFIX}" )
     add_definitions( -DCOPYQ_BASH_COMPLETION_PREFIX="${BASH_COMPLETION_INSTALL_PREFIX}" )
     add_definitions( -DCOPYQ_ICON_NAME="${ICON_NAME}" )
+
+    if (COPYQ_AUTOSTART)
+        add_definitions( -DCOPYQ_AUTOSTART )
+    endif()
 
     if (COPYQ_AUTOSTART_COMMAND)
         add_definitions( -DCOPYQ_AUTOSTART_COMMAND="${COPYQ_AUTOSTART_COMMAND}" )

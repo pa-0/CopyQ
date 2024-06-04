@@ -14,7 +14,7 @@ skip_branch_with_pr: true
 environment:
   APPVEYOR_SAVE_CACHE_ON_ERROR: true
 
-  KF5_VERSION: 5.103
+  KF5_VERSION: 5.109
   KF5_PATCH: 0
   SNORETOAST_VERSION: 0.9.0
 
@@ -29,9 +29,10 @@ environment:
       LIBSSL: libssl-1_1.dll
       LIBCRYPTO: libcrypto-1_1.dll
       WITH_NATIVE_NOTIFICATIONS: "ON"
+      GPGPATH: /c/Program Files/Git/usr/bin
 
 # Parameters for default build commands (build_script is used instead).
-build:
+build: false
 
 install:
   - ps: $env:Path = "C:\Program Files\Git\bin;$env:Path"
@@ -46,9 +47,9 @@ build_script:
 after_build:
   - bash utils/appveyor/after_build.sh
 
-artifacts:
-  - path: 'copyq-*-setup.exe'
-    name: CopyQ Setup
+test_script:
+  - bash utils/appveyor/test_screenshots.sh
+  - bash utils/appveyor/test.sh
 
 # Upload test log files.
 on_finish:

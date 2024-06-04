@@ -4,8 +4,10 @@
 
 #include "common/common.h"
 #include "common/log.h"
+#include "common/mimetypes.h"
 
 #include <QGuiApplication>
+#include <QMimeData>
 #include <QStringList>
 
 QClipboard::Mode modeToQClipboardMode(ClipboardMode mode)
@@ -35,24 +37,39 @@ QVariantMap DummyClipboard::data(ClipboardMode mode, const QStringList &formats)
 
 void DummyClipboard::setData(ClipboardMode mode, const QVariantMap &dataMap)
 {
-    Q_ASSERT( isMainThread() );
-
     QGuiApplication::clipboard()->setMimeData( createMimeData(dataMap), modeToQClipboardMode(mode) );
+}
+
+const QMimeData *DummyClipboard::rawMimeData(ClipboardMode mode) const
+{
+    return QGuiApplication::clipboard()->mimeData( modeToQClipboardMode(mode) );
 }
 
 const QMimeData *DummyClipboard::mimeData(ClipboardMode mode) const
 {
     const auto modeText = mode == ClipboardMode::Clipboard ? "clipboard" : "selection";
 
-    COPYQ_LOG_VERBOSE( QString("Getting %1 data.").arg(modeText) );
-    const QMimeData *data = QGuiApplication::clipboard()->mimeData( modeToQClipboardMode(mode) );
+    COPYQ_LOG_VERBOSE( QStringLiteral("Getting %1 data").arg(modeText) );
+    const QMimeData *data = rawMimeData(mode);
 
-    if (data)
-        COPYQ_LOG_VERBOSE( QString("Got %1 data.").arg(modeText) );
-    else
-        log( QString("Null data in %1.").arg(modeText), LogError );
+    if (!data) {
+        log( QStringLiteral("Null data in %1").arg(modeText), LogError );
+        return nullptr;
+    }
 
+    if (isHidden(*data)) {
+        log( QStringLiteral("Hiding secret %1 data").arg(modeText) );
+        return nullptr;
+    }
+
+    COPYQ_LOG_VERBOSE( QStringLiteral("Got %1 data").arg(modeText) );
     return data;
+}
+
+bool DummyClipboard::isHidden(const QMimeData &data) const
+{
+    const QByteArray passwordManagerHint = data.data(QStringLiteral("x-kde-passwordManagerHint"));
+    return passwordManagerHint == QByteArrayLiteral("secret");
 }
 
 void DummyClipboard::onChanged(int mode)

@@ -9,6 +9,7 @@
 #include "common/common.h"
 #include "common/log.h"
 #include "common/textdata.h"
+#include "item/itemfactory.h"
 #include "platform/platformnativeinterface.h"
 #include "scriptable/scriptable.h"
 #include "scriptable/scriptableproxy.h"
@@ -25,22 +26,22 @@ QString messageCodeToString(int code)
 {
     switch (code) {
     case CommandFunctionCallReturnValue:
-        return "CommandFunctionCallReturnValue";
+        return QStringLiteral("CommandFunctionCallReturnValue");
     case CommandInputDialogFinished:
-        return "CommandInputDialogFinished";
+        return QStringLiteral("CommandInputDialogFinished");
     case CommandStop:
-        return "CommandStop";
+        return QStringLiteral("CommandStop");
     case CommandData:
-        return "CommandData";
+        return QStringLiteral("CommandData");
     default:
-        return QString::fromLatin1("Unknown(%1)").arg(code);
+        return QStringLiteral("Unknown(%1)").arg(code);
     }
 }
 
 QCoreApplication *createClientApplication(int &argc, char **argv, const QStringList &arguments)
 {
     // Clipboard access requires QApplication.
-    if ( arguments.size() > 1 && arguments[0] == "--clipboard-access" ) {
+    if ( arguments.size() > 1 && arguments[0] == QLatin1String("--clipboard-access") ) {
         const auto app = platformNativeInterface()
                 ->createClipboardProviderApplication(argc, argv);
         setLogLabel(arguments[1].toUtf8());
@@ -60,16 +61,12 @@ ClipboardClient::ClipboardClient(int &argc, char **argv, const QStringList &argu
     App::installTranslator();
 
     // Start script after QCoreApplication::exec().
-    auto timer = new QTimer(this);
-    timer->setSingleShot(true);
-    connect(timer, &QTimer::timeout, this, [&]() { start(arguments); });
-    connect(timer, &QTimer::timeout, timer, &QObject::deleteLater);
-    timer->start(0);
+    QTimer::singleShot(0, this, [&]() { start(arguments); });
 }
 
 void ClipboardClient::onMessageReceived(const QByteArray &data, int messageCode)
 {
-    COPYQ_LOG_VERBOSE( "Message received: " + messageCodeToString(messageCode) );
+    COPYQ_LOG_VERBOSE( QLatin1String("Message received: ") + messageCodeToString(messageCode) );
 
     switch (messageCode) {
     case CommandFunctionCallReturnValue:
@@ -91,7 +88,7 @@ void ClipboardClient::onMessageReceived(const QByteArray &data, int messageCode)
         break;
 
     default:
-        log( "Unhandled message: " + messageCodeToString(messageCode), LogError );
+        log( QLatin1String("Unhandled message: ") + messageCodeToString(messageCode), LogError );
         break;
     }
 }
@@ -114,9 +111,14 @@ void ClipboardClient::onConnectionFailed()
 
 void ClipboardClient::start(const QStringList &arguments)
 {
+    ItemFactory itemFactory;
+    itemFactory.loadPlugins();
+    QSettings settings;
+    itemFactory.loadItemFactorySettings(&settings);
+
     QJSEngine engine;
     ScriptableProxy scriptableProxy(nullptr, nullptr);
-    Scriptable scriptable(&engine, &scriptableProxy);
+    Scriptable scriptable(&engine, &scriptableProxy, &itemFactory);
 
     const auto serverName = clipboardServerName();
     ClientSocket socket(serverName);

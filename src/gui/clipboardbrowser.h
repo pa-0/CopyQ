@@ -5,7 +5,6 @@
 
 #include "common/clipboardmode.h"
 #include "gui/clipboardbrowsershared.h"
-#include "gui/theme.h"
 #include "item/clipboardmodel.h"
 #include "item/itemdelegate.h"
 #include "item/itemfilter.h"
@@ -15,9 +14,6 @@
 #include <QPointer>
 #include <QTimer>
 #include <QVariantMap>
-#include <QVector>
-
-#include <memory>
 
 class ItemEditorWidget;
 class ItemFactory;
@@ -102,7 +98,7 @@ class ClipboardBrowser final : public QListView
 
         void removeIndexes(const QModelIndexList &indexes, QString *error = nullptr);
 
-        bool canRemoveItems(const QModelIndexList &indexes, QString *error = nullptr) const;
+        bool canRemoveItems(const QModelIndexList &indexes, QString *error = nullptr);
 
         /** Render preview image with items. */
         QPixmap renderItemPreview(const QModelIndexList &indexes, int maxWidth, int maxHeight);
@@ -226,6 +222,9 @@ class ClipboardBrowser final : public QListView
         using QListView::verticalOffset;
 
     signals:
+        void itemsAboutToBeRemoved(const QModelIndex &parent, int first, int last);
+        void runOnRemoveItemsHandler(const QList<QPersistentModelIndex> &indexes, bool *canRemove);
+
         /** Show list request. */
         void requestShow(const ClipboardBrowser *self);
         /** Request clipboard change. */
@@ -354,6 +353,7 @@ class ClipboardBrowser final : public QListView
 
         /// Removes indexes without notifying or asking plugins.
         void dropIndexes(const QModelIndexList &indexes);
+        void dropIndexes(const QList<QPersistentModelIndex> &indexes);
 
         void focusEditedIndex();
 

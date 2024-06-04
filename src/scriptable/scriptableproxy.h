@@ -37,10 +37,16 @@ struct VariantMapList {
     QVector<QVariantMap> items;
 };
 
-using NamedValueList = QVector<NamedValue>;
+struct NamedValueList {
+    QList<NamedValue> items;
+};
 
-struct ScriptablePath {
-    QString path;
+struct NotificationButtonList {
+    QList<NotificationButton> items;
+};
+
+struct KeyboardModifierList {
+    Qt::KeyboardModifiers items;
 };
 
 struct ItemSelection {
@@ -49,27 +55,24 @@ struct ItemSelection {
 };
 
 Q_DECLARE_METATYPE(NamedValueList)
-Q_DECLARE_METATYPE(ScriptablePath)
-Q_DECLARE_METATYPE(NotificationButtons)
+Q_DECLARE_METATYPE(NotificationButtonList)
 Q_DECLARE_METATYPE(VariantMapList)
-Q_DECLARE_METATYPE(Qt::KeyboardModifiers)
+Q_DECLARE_METATYPE(KeyboardModifierList)
 
 #if QT_VERSION < QT_VERSION_CHECK(6,0,0)
 Q_DECLARE_METATYPE(ClipboardMode)
 #endif
 
-QDataStream &operator<<(QDataStream &out, const NotificationButtons &list);
-QDataStream &operator>>(QDataStream &in, NotificationButtons &list);
+QDataStream &operator<<(QDataStream &out, const NotificationButtonList &list);
+QDataStream &operator>>(QDataStream &in, NotificationButtonList &list);
 QDataStream &operator<<(QDataStream &out, const NamedValueList &list);
 QDataStream &operator>>(QDataStream &in, NamedValueList &list);
 QDataStream &operator<<(QDataStream &out, const VariantMapList &list);
 QDataStream &operator>>(QDataStream &in, VariantMapList &list);
 QDataStream &operator<<(QDataStream &out, ClipboardMode mode);
 QDataStream &operator>>(QDataStream &in, ClipboardMode &mode);
-QDataStream &operator<<(QDataStream &out, const ScriptablePath &path);
-QDataStream &operator>>(QDataStream &in, ScriptablePath &path);
-QDataStream &operator<<(QDataStream &out, Qt::KeyboardModifiers value);
-QDataStream &operator>>(QDataStream &in, Qt::KeyboardModifiers &value);
+QDataStream &operator<<(QDataStream &out, KeyboardModifierList value);
+QDataStream &operator>>(QDataStream &in, KeyboardModifierList &value);
 
 class ScriptableProxy final : public QObject
 {
@@ -131,7 +134,7 @@ public slots:
             const QString &icon,
             int msec,
             const QString &notificationId = QString(),
-            const NotificationButtons &buttons = NotificationButtons());
+            const NotificationButtonList &buttons = NotificationButtonList());
 
     QVariantMap nextItem(const QString &tabName, int where);
     void browserMoveToClipboard(const QString &tabName, int row);
@@ -235,7 +238,7 @@ public slots:
 
     QStringList screenNames();
 
-    Qt::KeyboardModifiers queryKeyboardModifiers();
+    KeyboardModifierList queryKeyboardModifiers();
     QPoint pointerPosition();
     void setPointerPosition(int x, int y);
 
@@ -274,6 +277,8 @@ public slots:
     bool hasClipboardFormat(const QString &mime, ClipboardMode mode);
 
     QStringList styles();
+
+    void setScriptOverrides(const QVector<int> &overrides);
 
 signals:
     void functionCallFinished(int functionCallId, const QVariant &returnValue);
@@ -319,5 +324,8 @@ private:
 QString pluginsPath();
 QString themesPath();
 QString translationsPath();
+
+void setClipboardMonitorRunning(bool running);
+bool isClipboardMonitorRunning();
 
 #endif // SCRIPTABLEPROXY_H

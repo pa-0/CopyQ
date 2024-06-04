@@ -241,6 +241,8 @@ ItemEditorWidget *ItemDelegate::createCustomEditor(
         text = getTextData(data, mimeHtml);
         if (text.isEmpty()) {
             text = getTextData(data);
+            if (text.isNull())
+                return nullptr;
         } else {
             hasHtml = true;
         }
@@ -265,6 +267,7 @@ ItemEditorWidget *ItemDelegate::createCustomEditor(
     editorParent->setBackgroundRole(QPalette::Base);
     editorParent->setAutoFillBackground(true);
     editorParent->setPalette(palette);
+    editor->setPalette(palette);
     editor->setStyleSheet("QTextEdit{background:transparent}");
 
     palette.setColor(QPalette::Base, Qt::transparent);

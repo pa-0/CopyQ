@@ -12,48 +12,54 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: macos-11
+          - os: macos-12
             buildname: macOS 10.15
-            build_type: Release
-            compiler: clang_64
-            create_bundle: true
+            bundle_suffix: '-macos-10'
+            cmake_preset: macOS-10
+
+          - os: macos-14
+            buildname: macOS 12 M1
+            bundle_suffix: '-macos-12-m1'
+            cmake_preset: macOS-12-m1
 
     steps:
       - name: Checkout source code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           submodules: false
           fetch-depth: 1
 
+      - name: Enable ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ github.job }}-${{ matrix.os }}
+
+      - name: Set up ccache
+        run: |
+          export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
+
       - name: Install dependencies
+        env:
+          HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 1
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_INSTALL_CLEANUP: 1
         run: '${{github.workspace}}/utils/github/install-macos.sh'
 
       - name: Build with CMake
-        uses: lukka/run-cmake@v3
+        uses: lukka/run-cmake@v10
         with:
-          cmakeListsOrSettingsJson: CMakeListsTxtAdvanced
-          cmakeListsTxtPath: '${{github.workspace}}/CMakeLists.txt'
-          cmakeBuildType: Release
-          cmakeGenerator: Ninja
-          buildDirectory: '${{runner.workspace}}/build'
-          cmakeAppendedArgs: >-
-            -DWITH_TESTS=TRUE
-            -DCMAKE_BUILD_TYPE='${{matrix.build_type}}'
-            -DCMAKE_PREFIX_PATH="/usr/local/opt/qt@5/lib/cmake"
-            -DCMAKE_OSX_DEPLOYMENT_TARGET='10.15'
-            -DCMAKE_CXX_FLAGS="-Wno-deprecated-declarations"
+          configurePreset: '${{ matrix.cmake_preset }}'
+          buildPreset: '${{ matrix.cmake_preset }}'
 
       - name: Create gnupg directory for tests
-        run: mkdir -p ~/.gnupg
+        run: mkdir -p ~/.gnupg && chmod go-rwx ~/.gnupg
 
       - name: Create macOS bundle
-        if: matrix.create_bundle
         working-directory: '${{runner.workspace}}/build'
         run: '${{github.workspace}}/utils/github/bundle-macos.sh'
 
       - name: Upload macOS bundle
-        if: matrix.create_bundle
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
-          name: CopyQ.dmg
+          name: 'CopyQ${{ matrix.bundle_suffix }}.dmg'
           path: '${{runner.workspace}}/build/CopyQ.dmg'

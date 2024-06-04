@@ -6,11 +6,13 @@
 #include "common/log.h"
 #include "common/textdata.h"
 #include "item/itemfactory.h"
+#include "item/serialize.h"
 
 #include <QAbstractItemModel>
 #include <QDir>
 #include <QFile>
 #include <QSaveFile>
+#include <QSet>
 
 namespace {
 
@@ -20,20 +22,6 @@ QString itemFileName(const QString &id)
     QString part( id.toUtf8().toBase64() );
     part.replace( QChar('/'), QString('-') );
     return getConfigurationFilePath("_tab_") + part + QLatin1String(".dat");
-}
-
-bool createItemDirectory()
-{
-    QDir settingsDir( settingsDirectoryPath() );
-    if ( !settingsDir.mkpath(".") ) {
-        log( QString("Cannot create directory for settings %1!")
-             .arg(quoteString(settingsDir.path()) ),
-             LogError );
-
-        return false;
-    }
-
-    return true;
 }
 
 void printItemFileError(
@@ -79,13 +67,31 @@ ItemSaverPtr createTab(
     return saver;
 }
 
+bool itemDataFiles(const QString &tabName, QStringList *files)
+{
+    const QString tabFileName = itemFileName(tabName);
+    if ( !QFile::exists(tabFileName) )
+        return true;
+
+    QFile tabFile(tabFileName);
+    if ( !tabFile.open(QIODevice::ReadOnly) ) {
+        printItemFileError("read tab", tabName, tabFile);
+        return false;
+    }
+
+    return itemDataFiles(&tabFile, files);
+}
+
+void cleanDataDir(QDir *dir)
+{
+    if ( dir->isEmpty() )
+        QDir().rmdir( dir->absolutePath() );
+}
+
 } // namespace
 
 ItemSaverPtr loadItems(const QString &tabName, QAbstractItemModel &model, ItemFactory *itemFactory, int maxItems)
 {
-    if ( !createItemDirectory() )
-        return nullptr;
-
     const QString tabFileName = itemFileName(tabName);
     if ( !QFile::exists(tabFileName) )
         return createTab(tabName, model, itemFactory, maxItems);
@@ -107,7 +113,7 @@ bool saveItems(const QString &tabName, const QAbstractItemModel &model, const It
 {
     const QString tabFileName = itemFileName(tabName);
 
-    if ( !createItemDirectory() )
+    if ( !ensureSettingsDirectoryExists() )
         return false;
 
     // Save tab data to a new temporary file.
@@ -167,4 +173,45 @@ bool moveItems(const QString &oldId, const QString &newId)
        ), LogError );
 
     return false;
+}
+
+void cleanDataFiles(const QStringList &tabNames)
+{
+    QDir dir(itemDataPath());
+    if ( !dir.exists() )
+        return;
+
+    QStringList files;
+    for (const QString &tabName : tabNames) {
+        if ( !itemDataFiles(tabName, &files) ) {
+            COPYQ_LOG( QStringLiteral("Stopping cleanup due to corrupted file: %1")
+                    .arg(tabName) );
+            return;
+        }
+    }
+
+#if QT_VERSION >= QT_VERSION_CHECK(5,14,0)
+    const QSet<QString> fileSet(files.constBegin(), files.constEnd());
+#else
+    const QSet<QString> fileSet = files.toSet();
+#endif
+    for ( const auto &i1 : dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot) ) {
+        QDir d1(i1.absoluteFilePath());
+        for ( const auto &i2 : d1.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot) ) {
+            QDir d2(i2.absoluteFilePath());
+            for ( const auto &i3 : d2.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot) ) {
+                QDir d3(i3.absoluteFilePath());
+                for ( const auto &f : d3.entryInfoList(QDir::Files) ) {
+                    const QString path = f.absoluteFilePath();
+                    if ( !fileSet.contains(path) ) {
+                        COPYQ_LOG( QStringLiteral("Cleaning: %1").arg(path) );
+                        QFile::remove(path);
+                    }
+                }
+                cleanDataDir(&d3);
+            }
+            cleanDataDir(&d2);
+        }
+        cleanDataDir(&d1);
+    }
 }

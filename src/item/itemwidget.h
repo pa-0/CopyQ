@@ -3,23 +3,24 @@
 #ifndef ITEMWIDGET_H
 #define ITEMWIDGET_H
 
-#include "common/command.h"
 #include "tests/testinterface.h"
 
-#include <QStringList>
+#include <QObject>
 #include <QtContainerFwd>
-#include <QtPlugin>
-#include <QVariantMap>
-#include <QWidget>
 
 #include <memory>
 
+struct Command;
+
 class ItemFilter;
+class TestInterface;
 class QAbstractItemModel;
 class QIODevice;
 class QModelIndex;
+class QPersistentModelIndex;
 class QSettings;
 class QTextEdit;
+class QWidget;
 
 class ItemLoaderInterface;
 using ItemLoaderPtr = std::shared_ptr<ItemLoaderInterface>;
@@ -30,7 +31,9 @@ using ItemSaverPtr = std::shared_ptr<ItemSaverInterface>;
 class ItemScriptableFactoryInterface;
 using ItemScriptableFactoryPtr = std::shared_ptr<ItemScriptableFactoryInterface>;
 
-#define COPYQ_PLUGIN_ITEM_LOADER_ID "com.github.hluk.copyq.itemloader/7.0.0"
+using TestInterfacePtr = std::shared_ptr<TestInterface>;
+
+#define COPYQ_PLUGIN_ITEM_LOADER_ID "com.github.hluk.copyq.itemloader/8.0.0"
 
 /**
  * Handles item in list.
@@ -202,7 +205,7 @@ public:
     /**
      * Called when items are being deleted by user.
      */
-    virtual void itemsRemovedByUser(const QList<QModelIndex> &indexList);
+    virtual void itemsRemovedByUser(const QList<QPersistentModelIndex> &indexList);
 
     /**
      * Return copy of items data.
@@ -278,21 +281,22 @@ public:
      *
      * Default is no icon.
      */
-    virtual QVariant icon() const { return QVariant(); }
+    virtual QVariant icon() const = 0;
 
     /**
      * Provide formats to save (possibly configurable).
      *
      * The values are stored into user QSettings, under group with name same as value of id().
      */
-    virtual QStringList formatsToSave() const { return QStringList(); }
+    virtual QStringList formatsToSave() const;
 
     /**
      * Save and return configuration values to save from current settings widget.
      */
     virtual void applySettings(QSettings &) {}
 
-    virtual void setEnabled(bool) {}
+    virtual void setEnabled(bool enabled) { m_enabled = enabled; }
+    bool isEnabled() const { return m_enabled; }
 
     /**
      * Load stored configuration values.
@@ -390,6 +394,9 @@ public:
 
     ItemLoaderInterface(const ItemLoaderInterface &) = delete;
     ItemLoaderInterface &operator=(const ItemLoaderInterface &) = delete;
+
+private:
+    bool m_enabled = true;
 };
 
 Q_DECLARE_INTERFACE(ItemLoaderInterface, COPYQ_PLUGIN_ITEM_LOADER_ID)

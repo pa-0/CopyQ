@@ -150,9 +150,9 @@ bool testStderr(const QByteArray &stderrData, TestInterface::ReadStderrFlag flag
     // Ignore exceptions and errors from clients in application log
     // (these are expected in some tests).
     static const std::vector<QRegularExpression> ignoreList{
-        plain("[EXPECTED-IN-TEST]"),
-
         regex(R"(CopyQ Note \[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\] <Client-[^\n]*)"),
+
+        plain("Event handler maximum recursion reached"),
 
         // X11 (Linux)
         plain("QtWarning: QXcbXSettings::QXcbXSettings(QXcbScreen*) Failed to get selection owner for XSETTINGS_S atom"),
@@ -190,8 +190,11 @@ bool testStderr(const QByteArray &stderrData, TestInterface::ReadStderrFlag flag
         regex(R"(QtWarning: Window position.* outside any known screen.*)"),
         regex(R"(QtWarning: Populating font family aliases took .* ms. Replace uses of missing font family "Font Awesome.*" with one that exists to avoid this cost.)"),
 
-        // New in Qt 5.15.0.
+        // New in Qt 5.15.0
         regex(R"(QtWarning: Populating font family aliases took .* ms. Replace uses of missing font family "Monospace" with one that exists to avoid this cost.)"),
+
+        // New in Qt 6.5
+        regex("QtWarning: Error in contacting registry"),
 
         // KNotification bug
         plain(R"(QtWarning: QLayout: Attempting to add QLayout "" to QWidget "", which already has a layout)"),
@@ -475,18 +478,41 @@ public:
         return clipboard()->data(mode, QStringList(mime)).value(mime).toByteArray();
     }
 
+    QByteArray setClipboard(const QVariantMap &data, ClipboardMode mode) override
+    {
+        if ( !data.isEmpty() ) {
+            // Wait for clipboard monitor
+            QByteArray error;
+            SleepTimer t(8000);
+            do {
+                error = runClient(
+                    Args("monitoring() == isClipboardMonitorRunning()"),
+                    QByteArrayLiteral("true\n"));
+            } while (!error.isEmpty() && t.sleep());
+
+            if (!error.isEmpty())
+                return "Clipboard monitor is not running:" + error;
+        }
+
+        clipboard()->setData(mode, data);
+        return {};
+    }
+
     QByteArray setClipboard(const QByteArray &bytes, const QString &mime, ClipboardMode mode) override
     {
-        if ( getClipboard(mime, mode) == bytes )
-            return QByteArray();
+        const QByteArray error = setClipboard( createDataMap(mime, bytes), mode );
+        if (!error.isEmpty())
+            return error;
 
-        waitFor(waitMsSetClipboard);
-        clipboard()->setData( mode, createDataMap(mime, bytes) );
         return verifyClipboard(bytes, mime);
     }
 
     QByteArray verifyClipboard(const QByteArray &data, const QString &mime, bool exact = true) override
     {
+        // Due to image conversions in clipboard check only png.
+        if ( mime.startsWith(QStringLiteral("image/")) && mime != QStringLiteral("image/png") )
+            return verifyClipboard("PNG", QStringLiteral("image/png"), false);
+
         PerformanceTimer perf;
 
         SleepTimer t(5000);
@@ -513,8 +539,6 @@ public:
         if (m_server) {
             QCoreApplication::processEvents();
             QByteArray output = readLogFile(maxReadLogSize);
-            if ( !m_ignoreError.isEmpty() )
-                output.replace(m_ignoreError, "[EXPECTED-IN-TEST] " + m_ignoreError);
             if ( flag == ReadAllStderr || !testStderr(output, flag) )
               return decorateOutput("Server STDERR", output);
         }
@@ -622,9 +646,9 @@ public:
         verifyConfiguration();
 
         // Clear clipboard.
-        RETURN_ON_ERROR( setClipboard(QByteArray(), mimeText, ClipboardMode::Clipboard), "Failed to reset clipboard" );
+        RETURN_ON_ERROR( setClipboard({}, ClipboardMode::Clipboard), "Failed to reset clipboard" );
 #ifdef HAS_MOUSE_SELECTIONS
-        RETURN_ON_ERROR( setClipboard(QByteArray(), mimeText, ClipboardMode::Selection), "Failed to reset selection" );
+        RETURN_ON_ERROR( setClipboard({}, ClipboardMode::Selection), "Failed to reset selection" );
 #endif
 
         RETURN_ON_ERROR( startServer(), "Failed to initialize server" );
@@ -638,14 +662,8 @@ public:
 
     QByteArray cleanup() override
     {
-        m_ignoreError.clear();
         addFailedTest();
         return QByteArray();
-    }
-
-    void setIgnoreError(const QByteArray &ignoreError) override
-    {
-        m_ignoreError = ignoreError;
     }
 
     QString shortcutToRemove() override
@@ -764,14 +782,7 @@ private:
     QStringList m_failed;
 
     PlatformClipboardPtr m_clipboard;
-
-    QByteArray m_ignoreError;
 };
-
-QString keyNameFor(QKeySequence::StandardKey standardKey)
-{
-    return QKeySequence(standardKey).toString();
-}
 
 int count(const QStringList &items, const QString &pattern)
 {
@@ -786,6 +797,17 @@ int count(const QStringList &items, const QString &pattern)
 QStringList splitLines(const QByteArray &nativeText)
 {
     return QString::fromUtf8(nativeText).split(QRegularExpression("\r\n|\n|\r"));
+}
+
+QString appWindowTitle(const QString &text)
+{
+#ifdef Q_OS_MAC
+    return QStringLiteral("CopyQ - %1\n").arg(text);
+#elif defined(Q_OS_WIN)
+    return QStringLiteral("%1 - CopyQ-TEST\n").arg(text);
+#else
+    return QStringLiteral("%1 — CopyQ-TEST\n").arg(text);
+#endif
 }
 
 } // namespace
@@ -1511,13 +1533,7 @@ void Tests::commandsData()
 void Tests::commandCurrentWindowTitle()
 {
     RUN("disable", "");
-#ifdef Q_OS_MAC
-    WAIT_ON_OUTPUT("currentWindowTitle", "CopyQ - *Clipboard Storing Disabled*\n");
-#elif defined(Q_OS_WIN)
-    WAIT_ON_OUTPUT("currentWindowTitle", "*Clipboard Storing Disabled* - CopyQ-TEST\n");
-#else
-    WAIT_ON_OUTPUT("currentWindowTitle", "*Clipboard Storing Disabled* — CopyQ-TEST\n");
-#endif
+    WAIT_ON_OUTPUT("currentWindowTitle", appWindowTitle("*Clipboard Storing Disabled*"));
     RUN("enable", "");
 }
 
@@ -1711,7 +1727,7 @@ void Tests::commandsAddCommandsRegExp()
 {
     const QString commands =
             "[Command]\n"
-            "Match=x\n";
+            "Match=^(https?|ftps?)://\\\\$\n";
 
     // Ensure there is a basic RegExp support.
     RUN("/test/", "/test/\n");
@@ -1720,7 +1736,7 @@ void Tests::commandsAddCommandsRegExp()
     RUN("eval" << "exportCommands(importCommands(arguments[1]))" << "--" << commands, commands);
     RUN("eval" << "Object.prototype.toString.call(importCommands(arguments[1])[0].re)" << "--" << commands, "[object RegExp]\n");
     RUN("eval" << "Object.prototype.toString.call(importCommands(arguments[1])[0].wndre)" << "--" << commands, "[object RegExp]\n");
-    RUN("eval" << "importCommands(arguments[1])[0].re" << "--" << commands, "/x/\n");
+    RUN("eval" << "importCommands(arguments[1])[0].re" << "--" << commands, "/^(https?|ftps?):\\/\\/\\$/\n");
     RUN("eval" << "importCommands(arguments[1])[0].wndre" << "--" << commands, "/(?:)/\n");
 
     RUN("eval" << "addCommands(importCommands(arguments[1]))" << "--" << commands, "");
@@ -1728,7 +1744,7 @@ void Tests::commandsAddCommandsRegExp()
 
     RUN("exportCommands(commands())", commands);
     RUN("commands()[0].name", "\n");
-    RUN("commands()[0].re", "/x/\n");
+    RUN("commands()[0].re", "/^(https?|ftps?):\\/\\/\\$/\n");
     RUN("commands()[0].wndre", "/(?:)/\n");
 }
 
@@ -1957,6 +1973,7 @@ void Tests::classByteArray()
 {
     RUN("ByteArray", "");
     RUN("ByteArray('test')", "test");
+    RUN("ByteArray(ByteArray('test'))", "test");
     RUN("typeof(ByteArray('test'))", "object\n");
     RUN("ByteArray('test') instanceof ByteArray", "true\n");
     RUN("b = ByteArray('0123'); b.chop(2); b", "01");
@@ -1965,6 +1982,7 @@ void Tests::classByteArray()
     RUN("ByteArray('0123').mid(1, 2)", "12");
     RUN("ByteArray('0123').mid(1)", "123");
     RUN("ByteArray('0123').right(3)", "123");
+    RUN("ByteArray('0123').remove(1, 2)", "03");
     RUN("ByteArray(' 01  23 ').simplified()", "01 23");
     RUN("ByteArray('0123').toBase64()", "MDEyMw==");
     RUN("ByteArray('ABCd').toLower()", "abcd");
@@ -2217,16 +2235,16 @@ void Tests::classItemSelection()
     RUN(args << "ItemSelection().select(/e/, 'application/x-tst').removeAll().str()", outRows.arg(""));
     RUN(args << "read('application/x-tst',0,1,2)", "abc,ghi,");
 
-    RUN(args << "ItemSelection().selectAll().itemAtIndex(0)['application/x-tst']", "abc\n");
-    RUN(args << "ItemSelection().selectAll().itemAtIndex(1)['application/x-tst']", "ghi\n");
-    RUN(args << "ItemSelection().select(/h/, 'application/x-tst').itemAtIndex(0)['application/x-tst']", "ghi\n");
+    RUN(args << "ItemSelection().selectAll().itemAtIndex(0)['application/x-tst']", "abc");
+    RUN(args << "ItemSelection().selectAll().itemAtIndex(1)['application/x-tst']", "ghi");
+    RUN(args << "ItemSelection().select(/h/, 'application/x-tst').itemAtIndex(0)['application/x-tst']", "ghi");
     RUN(args << "ItemSelection().select(/h/, 'application/x-tst').itemAtIndex(1)['application/x-tst'] == undefined", "true\n");
 
     RUN(args << "ItemSelection().select(/ghi/, 'application/x-tst').setItemAtIndex(0, {'application/x-tst': 'def'}).str()",
         outRows.arg("1"));
     RUN(args << "read('application/x-tst',0,1,2)", "abc,def,");
 
-    RUN(args << "d = ItemSelection().selectAll().items(); [d.length, d[0]['application/x-tst'], d[1]['application/x-tst']]", "2\nabc\ndef\n");
+    RUN(args << "d = ItemSelection().selectAll().items(); [d.length, str(d[0]['application/x-tst']), str(d[1]['application/x-tst'])]", "2\nabc\ndef\n");
     RUN(args << "ItemSelection().selectAll().setItems([{'application/x-tst': 'xyz'}]).str()", outRows.arg("0,1"));
     RUN(args << "read('application/x-tst',0,1,2)", "xyz,def,");
 
@@ -2241,9 +2259,9 @@ void Tests::classItemSelection()
     RUN(args << "read(mimeItemNotes,0,1,2)", "test2,test2,");
     RUN(args << "read('application/x-tst',0,1,2)", "abc,def,");
 
-    RUN(args << "ItemSelection().selectAll().itemsFormat(mimeItemNotes)", "test2\ntest2\n");
-    RUN(args << "ItemSelection().selectAll().itemsFormat('application/x-tst')", "abc\ndef\n");
-    RUN(args << "ItemSelection().selectAll().itemsFormat(ByteArray('application/x-tst'))", "abc\ndef\n");
+    RUN(args << "ItemSelection().selectAll().itemsFormat(mimeItemNotes).map(str)", "test2\ntest2\n");
+    RUN(args << "ItemSelection().selectAll().itemsFormat('application/x-tst').map(str)", "abc\ndef\n");
+    RUN(args << "ItemSelection().selectAll().itemsFormat(ByteArray('application/x-tst')).map(str)", "abc\ndef\n");
 
     RUN(args << "ItemSelection().selectAll().setItemsFormat(mimeItemNotes, undefined).str()", outRows.arg("0,1"));
     RUN(args << "read(mimeItemNotes,0,1,2)", ",,");
@@ -2265,9 +2283,8 @@ void Tests::classItemSelection()
     RUN(args << "ItemSelection().select(undefined, mimeItemNotes).str()", outRows.arg("0,2"));
 
     // Match nothing if select() argument is not a regular expression.
-    m_test->setIgnoreError("QtWarning: QString::contains: invalid QRegularExpression object");
+    RUN(args << "add" << "", "");
     RUN(args << "ItemSelection().select('A').str()", outRows.arg(""));
-    m_test->setIgnoreError(QByteArray());
 }
 
 void Tests::classItemSelectionGetCurrent()
@@ -2436,7 +2453,7 @@ void Tests::configMaxitems()
     RUN("separator" << " " << "read" << "0" << "1", "F E");
     RUN("size", "2\n");
 
-    // Ading too many items fails.
+    // Adding too many items fails.
     RUN_EXPECT_ERROR("add" << "1" << "2" << "3", CommandException);
     RUN("separator" << " " << "read" << "0" << "1", "F E");
     RUN("size", "2\n");
@@ -2469,25 +2486,13 @@ void Tests::configMaxitems()
 
 void Tests::keysAndFocusing()
 {
-#ifdef Q_OS_MAC
-    SKIP("FIXME: currentWindowTitle() returns different window titles on OS X.");
-#endif
-
     RUN("disable", "");
     RUN("keys" << clipboardBrowserId << "CTRL+T", "");
-
-#ifdef Q_OS_WIN
-    WAIT_ON_OUTPUT("currentWindowTitle", "New Tab - CopyQ-TEST\n");
-#else
-    WAIT_ON_OUTPUT("currentWindowTitle", "New Tab — CopyQ-TEST\n");
-#endif
+    WAIT_ON_OUTPUT("currentWindowTitle", appWindowTitle("New Tab"));
 
     RUN("keys" << tabDialogLineEditId << "ESC", "");
-#ifdef Q_OS_WIN
-    WAIT_ON_OUTPUT("currentWindowTitle", "*Clipboard Storing Disabled* - CopyQ-TEST\n");
-#else
-    WAIT_ON_OUTPUT("currentWindowTitle", "*Clipboard Storing Disabled* — CopyQ-TEST\n");
-#endif
+    WAIT_ON_OUTPUT("currentWindowTitle", appWindowTitle("*Clipboard Storing Disabled*"));
+
     RUN("enable", "");
 }
 
@@ -2565,6 +2570,13 @@ void Tests::searchItemsAndSelect()
     RUN("testSelected", QString(clipboardTabName) + " 5 5\n");
 
     RUN("keys" << filterEditId << "TAB" << clipboardBrowserId, "");
+}
+
+void Tests::searchItemsAndCopy()
+{
+    RUN("add" << "TEST_ITEM", "");
+    RUN("keys" << ":test" << "CTRL+C" << filterEditId, "");
+    WAIT_FOR_CLIPBOARD("TEST_ITEM");
 }
 
 void Tests::searchRowNumber()
@@ -2730,6 +2742,7 @@ void Tests::toggleClipboardMonitoring()
 
     RUN("disable", "");
     RUN("monitoring", "false\n");
+    WAIT_ON_OUTPUT("isClipboardMonitorRunning", "false\n");
 
     const QByteArray data2 = generateData();
     TEST( m_test->setClipboard(data2) );
@@ -2738,6 +2751,7 @@ void Tests::toggleClipboardMonitoring()
 
     RUN("enable", "");
     RUN("monitoring", "true\n");
+    WAIT_ON_OUTPUT("isClipboardMonitorRunning", "true\n");
 
     const QByteArray data3 = generateData();
     TEST( m_test->setClipboard(data3) );
@@ -3407,6 +3421,20 @@ void Tests::configPathEnvVariable()
     QCOMPARE( out.left(expectedOut.size()), expectedOut );
 }
 
+void Tests::itemDataPathEnvVariable()
+{
+    const auto path = QDir::home().absoluteFilePath("copyq-data");
+    const auto environment = QStringList("COPYQ_ITEM_DATA_PATH=" + path);
+
+    QByteArray out;
+    QByteArray err;
+    run(Args() << "info" << "data", &out, &err, QByteArray(), environment);
+    QVERIFY2( testStderr(err), err );
+
+    const auto expectedOut = path.toUtf8();
+    QCOMPARE( out.left(expectedOut.size()), expectedOut );
+}
+
 void Tests::configTabs()
 {
     const QString sep = QStringLiteral("\n");
@@ -3933,6 +3961,224 @@ void Tests::scriptCommandWithError()
     m_test->setEnv("COPYQ_TEST_THROW", "0");
 }
 
+void Tests::scriptPaste()
+{
+    const auto script = R"(
+        setCommands([
+            {
+                isScript: true,
+                cmd: 'global.paste = function() { add("PASTE") }'
+            },
+        ])
+        )";
+    RUN(script, "");
+    RUN("add(1)", "");
+    RUN("keys" << clipboardBrowserId << "ENTER", "");
+    WAIT_ON_OUTPUT("read(0)", "PASTE");
+}
+
+void Tests::scriptOnTabSelected()
+{
+    const auto script = R"(
+        setCommands([
+            {
+                isScript: true,
+                cmd: 'global.onTabSelected = function() { add(selectedTab()) }'
+            },
+        ])
+        )";
+    RUN(script, "");
+
+    const auto tab1 = testTab(1);
+    const auto tab2 = testTab(2);
+    RUN("show" << tab1, "");
+    WAIT_ON_OUTPUT("tab" << tab1 << "read(0)", tab1);
+    RUN("show" << tab2, "");
+    WAIT_ON_OUTPUT("tab" << tab2 << "read(0)", tab2);
+}
+
+void Tests::scriptOnItemsRemoved()
+{
+    const auto script = R"(
+        setCommands([
+            {
+                isScript: true,
+                cmd: `
+                  global.onItemsRemoved = function() {
+                    items = ItemSelection().current().items();
+                    tab(tab()[0]);
+                    add("R0:" + str(items[0][mimeText]));
+                    add("R1:" + str(items[1][mimeText]));
+                  }
+                `
+            },
+        ])
+        )";
+    RUN(script, "");
+    const auto tab1 = testTab(1);
+    RUN("tab" << tab1 << "add(3,2,1,0)", "");
+    RUN("tab" << tab1 << "remove(1,2)", "");
+    WAIT_ON_OUTPUT("separator" << "," << "read(0,1,2,)", "R1:2,R0:1,");
+
+    // Cancel item removal
+    const auto script2 = R"(
+        setCommands([
+            {
+                isScript: true,
+                cmd: "global.onItemsRemoved = global.fail",
+            },
+        ])
+        )";
+    RUN(script2, "");
+    const auto tab2 = testTab(2);
+    RUN("tab" << tab2 << "add(3,2,1,0)", "");
+    RUN("tab" << tab2 << "remove(1,2)", "");
+    waitFor(1000);
+    RUN("tab" << tab2 << "separator" << "," << "read(0,1,2,3,4)", "0,1,2,3,");
+
+    // Avoid crash if the tab itself is removed while removing items
+    const auto script3 = R"(
+        setCommands([
+            {
+                isScript: true,
+                cmd: `
+                  global.onItemsRemoved = function() {
+                    removeTab(selectedTab())
+                  }
+                `
+            },
+        ])
+        )";
+    RUN(script3, "");
+    const auto tab3 = testTab(3);
+    RUN("tab" << tab3 << "add(3,2,1,0)", "");
+    RUN("tab" << tab3 << "remove(1,2)", "");
+    waitFor(1000);
+    RUN("tab" << tab3 << "separator" << "," << "read(0,1,2,3,4)", ",,,,");
+}
+
+void Tests::scriptOnItemsAdded()
+{
+    const auto script = R"(
+        setCommands([
+            {
+                isScript: true,
+                cmd: `
+                  global.onItemsAdded = function() {
+                    sel = ItemSelection().current();
+                    items = sel.items();
+                    items[0][mimeText] = "A:" + str(items[0][mimeText])
+                    sel.setItems(items);
+                  }
+                `
+            },
+        ])
+        )";
+    RUN(script, "");
+    const auto tab1 = testTab(1);
+    RUN("tab" << tab1 << "add(1,0)", "");
+    WAIT_ON_OUTPUT("tab" << tab1 << "separator" << "," << "read(0,1,2)", "A:0,A:1,");
+}
+
+void Tests::scriptOnItemsChanged()
+{
+    const auto script = R"(
+        setCommands([
+            {
+                isScript: true,
+                cmd: `
+                  global.onItemsChanged = function() {
+                    if (selectedTab() == tab()[0]) abort();
+                    items = ItemSelection().current().items();
+                    tab(tab()[0]);
+                    add("C:" + str(items[0][mimeText]));
+                  }
+                `
+            },
+        ])
+        )";
+    RUN(script, "");
+    const auto tab1 = testTab(1);
+    RUN("tab" << tab1 << "add(0)", "");
+    RUN("tab" << tab1 << "change(0, mimeText, 'A')", "");
+    WAIT_ON_OUTPUT("separator" << "," << "read(0,1,2)", "C:A,,");
+    RUN("tab" << tab1 << "change(0, mimeText, 'B')", "");
+    WAIT_ON_OUTPUT("separator" << "," << "read(0,1,2)", "C:B,C:A,");
+}
+
+void Tests::scriptOnItemsLoaded()
+{
+    const auto script = R"(
+        setCommands([
+            {
+                isScript: true,
+                cmd: `
+                  global.onItemsLoaded = function() {
+                    if (selectedTab() == tab()[0]) abort();
+                    tab(tab()[0]);
+                    add(selectedTab());
+                  }
+                `
+            },
+        ])
+        )";
+    RUN(script, "");
+
+    const auto tab1 = testTab(1);
+    RUN("show" << tab1, "");
+    WAIT_ON_OUTPUT("separator" << "," << "read(0,1,2)", tab1 + ",,");
+
+    const auto tab2 = testTab(2);
+    RUN("show" << tab2, "");
+    WAIT_ON_OUTPUT("separator" << "," << "read(0,1,2)", tab2 + "," + tab1 + ",");
+}
+
+void Tests::scriptEventMaxRecursion()
+{
+    const auto script = R"(
+        setCommands([
+            {
+                isScript: true,
+                cmd: `global.onItemsRemoved = function() {
+                    const toRemove = str(selectedItemData(0)[mimeText]);
+                    const newItem = (toRemove == "X") ? "A" : ("WRONG:" + toRemove);
+                    add(newItem);
+                    remove(size()-1);
+                }`
+            },
+        ])
+        )";
+    RUN(script, "");
+    RUN("add('X'); remove(0)", "");
+    WAIT_ON_OUTPUT("separator" << "," << "read(0,1,2,3,4,5,6,7,8,9,10)", "A,A,A,A,A,A,A,A,A,A,");
+    waitFor(200);
+    RUN("separator" << "," << "read(0,1,2,3,4,5,6,7,8,9,10)", "A,A,A,A,A,A,A,A,A,A,");
+}
+
+void Tests::scriptSlowCollectOverrides()
+{
+    const auto script = R"(
+        setCommands([
+            {
+                isScript: true,
+                cmd: 'global.onTabSelected = function() { add(selectedTab()) }'
+            },
+            {
+                isScript: true,
+                cmd: `
+                  var collectOverrides_ = global.collectOverrides;
+                  global.collectOverrides = function() { sleep(1000); collectOverrides_() }
+                `
+            },
+        ])
+        )";
+    RUN(script, "");
+
+    const auto tab1 = testTab(1);
+    RUN("show" << tab1, "");
+    WAIT_ON_OUTPUT("tab" << tab1 << "read(0)", tab1);
+}
+
 void Tests::displayCommand()
 {
     const auto testMime = COPYQ_MIME_PREFIX "test";
@@ -3962,6 +4208,36 @@ void Tests::displayCommand()
                 QString::fromLatin1("%1/b\nb\n%1/a\na\n")
                 .arg(clipboardTabName)
                 .toUtf8() );
+}
+
+void Tests::displayCommandForMenu()
+{
+    const auto tab = testTab(1);
+    const auto args = Args("tab") << tab << "separator" << ",";
+    const auto script = QString(R"(
+        setCommands([{
+            display: true,
+            cmd: 'copyq:'
+               + 'currentTab = str(data(mimeCurrentTab));'
+               + 'inMenu = str(data(mimeDisplayItemInMenu));'
+               + 'if (inMenu != "1" || currentTab != "%1") abort();'
+               + 'text = str(data(mimeText));'
+               + 'setData(mimeText, "display:" + text);'
+               + 'setData(mimeIcon, String.fromCharCode(0xF328));'
+               + 'setData("application/x-copyq-item-tag", "TAG");'
+               + 'tab(tab()[0]);'
+               + 'old = str(read(0));'
+               + 'add(old + "|" + text);'
+        }])
+        )").arg(tab);
+
+    RUN("config" << "tray_tab" << tab, tab + "\n");
+    RUN("config" << "tray_tab_is_current" << "false", "false\n");
+    RUN(script, "");
+
+    RUN(args << "add(1,2,3,4,5)", "");
+    RUN("menu", "");
+    WAIT_ON_OUTPUT("read(0)", "|5|4|3|2|1");
 }
 
 void Tests::synchronizeInternalCommands()
@@ -4326,11 +4602,17 @@ void Tests::changeAlwaysOnTop()
 
     RUN("config" << "always_on_top" << "true", "true\n");
     WAIT_ON_OUTPUT("visible", "true\n");
+    // There is a problem activating the window again after
+    // changing the always-on-top flag on macOS with Qt 6.
+#if !defined(Q_OS_MAC) || QT_VERSION < QT_VERSION_CHECK(6,0,0)
     WAIT_ON_OUTPUT("focused", "true\n");
+#endif
 
     RUN("config" << "always_on_top" << "false", "false\n");
     WAIT_ON_OUTPUT("visible", "true\n");
+#if !defined(Q_OS_MAC) || QT_VERSION < QT_VERSION_CHECK(6,0,0)
     WAIT_ON_OUTPUT("focused", "true\n");
+#endif
 
     RUN("hide", "");
     RUN("visible", "false\n");
@@ -4397,6 +4679,125 @@ void Tests::startServerAndRunCommand()
     // Try to start new client.
     SleepTimer t(10000);
     while ( run(Args("exit();sleep(10000)")) == 0 && t.sleep() ) {}
+}
+
+void Tests::avoidStoringPasswords()
+{
+#ifdef Q_OS_WIN
+    const QString format("application/x-qt-windows-mime;value=\"Clipboard Viewer Ignore\"");
+    const QByteArray value("");
+#elif defined(Q_OS_MACOS)
+    const QString format("application/x-nspasteboard-concealed-type");
+    const QByteArray value("secret");
+#elif defined(Q_OS_UNIX)
+    const QString format("x-kde-passwordManagerHint");
+    const QByteArray value("secret");
+#endif
+
+    const QVariantMap data{
+        {format, value},
+        {mimeText, QByteArrayLiteral("secret")},
+    };
+    TEST( m_test->setClipboard(data) );
+    waitFor(2 * waitMsPasteClipboard);
+    RUN("clipboard" << "?", "");
+    RUN("read" << "0" << "1" << "2", "\n\n");
+    RUN("count", "0\n");
+
+    RUN("keys" << clipboardBrowserId << keyNameFor(QKeySequence::Paste), "");
+    waitFor(waitMsPasteClipboard);
+    RUN("read" << "0" << "1" << "2", "\n\n");
+    RUN("count", "0\n");
+}
+
+void Tests::currentClipboardOwner()
+{
+    const auto script = R"(
+        setCommands([
+            {
+                isScript: true,
+                cmd: 'global.currentClipboardOwner = function() { return settings("clipboard_owner"); }'
+            },
+            {
+                automatic: true,
+                input: mimeWindowTitle,
+                cmd: 'copyq: setData("application/x-copyq-owner-test", input())',
+            },
+            {
+                automatic: true,
+                wndre: '.*IGNORE',
+                cmd: 'copyq ignore; copyq add IGNORED',
+            },
+        ])
+        )";
+    RUN("settings" << "clipboard_owner" << "TEST1", "");
+    RUN(script, "");
+
+    TEST( m_test->setClipboard("test1") );
+    WAIT_ON_OUTPUT("read(0)", "test1");
+    RUN("read('application/x-copyq-owner-test', 0)", "TEST1");
+
+    RUN("settings" << "clipboard_owner" << "TEST2", "");
+    RUN("config" << "update_clipboard_owner_delay_ms" << "10000", "10000\n");
+    TEST( m_test->setClipboard("test2") );
+    WAIT_ON_OUTPUT("read(0)", "test2");
+    RUN("read('application/x-copyq-owner-test', 0)", "TEST2");
+
+    RUN("settings" << "clipboard_owner" << "TEST3", "");
+    TEST( m_test->setClipboard("test3") );
+    WAIT_ON_OUTPUT("read(0)", "test3");
+    RUN("read('application/x-copyq-owner-test', 0)", "TEST2");
+
+    RUN("settings" << "clipboard_owner" << "TEST4_IGNORE", "");
+    RUN("config" << "update_clipboard_owner_delay_ms" << "0", "0\n");
+    TEST( m_test->setClipboard("test4") );
+    WAIT_ON_OUTPUT("read(0)", "IGNORED");
+
+    RUN("settings" << "clipboard_owner" << "TEST5", "");
+    TEST( m_test->setClipboard("test5") );
+    WAIT_ON_OUTPUT("read(0)", "test5");
+    RUN("read('application/x-copyq-owner-test', 0)", "TEST5");
+}
+
+void Tests::saveLargeItem()
+{
+    const auto tab = testTab(1);
+    const auto args = Args("tab") << tab;
+
+    const auto script = R"(
+        write(0, [{
+            'text/plain': '1234567890'.repeat(10000),
+            'application/x-copyq-test-data': 'abcdefghijklmnopqrstuvwxyz'.repeat(10000),
+        }])
+        )";
+    RUN(args << script, "");
+
+    for (int i = 0; i < 2; ++i) {
+        RUN(args << "read(0).left(20)", "12345678901234567890");
+        RUN(args << "read(0).length", "100000\n");
+        RUN(args << "getItem(0)[mimeText].length", "100000\n");
+        RUN(args << "getItem(0)[mimeText].left(20)", "12345678901234567890");
+        RUN(args << "getItem(0)['application/x-copyq-test-data'].left(26)", "abcdefghijklmnopqrstuvwxyz");
+        RUN(args << "getItem(0)['application/x-copyq-test-data'].length", "260000\n");
+        RUN(args << "ItemSelection().selectAll().itemAtIndex(0)[mimeText].length", "100000\n");
+        RUN("unload" << tab, tab + "\n");
+    }
+
+    RUN("show" << tab, "");
+    RUN("keys" << clipboardBrowserId << keyNameFor(QKeySequence::Copy), "");
+    WAIT_ON_OUTPUT("clipboard().left(20)", "12345678901234567890");
+    RUN("clipboard('application/x-copyq-test-data').left(26)", "abcdefghijklmnopqrstuvwxyz");
+    RUN("clipboard('application/x-copyq-test-data').length", "260000\n");
+
+    const auto tab2 = testTab(2);
+    const auto args2 = Args("tab") << tab2;
+    RUN("show" << tab2, "");
+    waitFor(waitMsPasteClipboard);
+    RUN("keys" << clipboardBrowserId << keyNameFor(QKeySequence::Paste), "");
+    RUN(args2 << "read(0).left(20)", "12345678901234567890");
+    RUN(args2 << "read(0).length", "100000\n");
+    RUN(args << "getItem(0)['application/x-copyq-test-data'].left(26)", "abcdefghijklmnopqrstuvwxyz");
+    RUN(args << "getItem(0)['application/x-copyq-test-data'].length", "260000\n");
 }
 
 int Tests::run(

@@ -5,15 +5,14 @@
 
 #include "common/settings.h"
 
-#include <QVariant>
-
 class QString;
+class QVariant;
 
 QString defaultClipboardTabName();
 
 namespace Config {
 
-const int maxItems = 10000;
+const int maxItems = 100'000;
 
 template<typename ValueType>
 struct Config {
@@ -32,6 +31,15 @@ struct maxitems : Config<int> {
     static QString name() { return "maxitems"; }
     static Value defaultValue() { return 200; }
     static Value value(Value v) { return qBound(0, v, maxItems); }
+};
+
+struct item_data_threshold : Config<int> {
+    static QString name() { return "item_data_threshold"; }
+    static Value defaultValue() { return 1024; }
+    static const char *description() {
+        return "Maximum item data size in bytes to save in tab data file"
+               " (larger data are stored in separate files)";
+    }
 };
 
 struct clipboard_tab : Config<QString> {
@@ -486,11 +494,12 @@ struct window_wait_for_modifier_released_ms : Config<int> {
     }
 };
 
-struct change_clipboard_owner_delay_ms : Config<int> {
-    static QString name() { return "change_clipboard_owner_delay_ms"; }
-    static Value defaultValue() { return 150; }
+struct update_clipboard_owner_delay_ms : Config<int> {
+    static QString name() { return "update_clipboard_owner_delay_ms"; }
+    static Value defaultValue() { return -1; }
     static const char *description() {
-        return "Delay to save new clipboard owner window title";
+        return "Delay to update new clipboard owner window title"
+               " (use negative value for the default interval)";
     }
 };
 

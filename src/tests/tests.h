@@ -157,6 +157,7 @@ private slots:
     void deleteItems();
     void searchItems();
     void searchItemsAndSelect();
+    void searchItemsAndCopy();
     void searchRowNumber();
     void searchAccented();
     void copyItems();
@@ -215,6 +216,7 @@ private slots:
     void configAutostart();
 
     void configPathEnvVariable();
+    void itemDataPathEnvVariable();
 
     void configTabs();
 
@@ -248,7 +250,18 @@ private slots:
     void scriptCommandEnhanceFunction();
     void scriptCommandEndingWithComment();
     void scriptCommandWithError();
+
+    void scriptPaste();
+    void scriptOnTabSelected();
+    void scriptOnItemsRemoved();
+    void scriptOnItemsAdded();
+    void scriptOnItemsChanged();
+    void scriptOnItemsLoaded();
+    void scriptEventMaxRecursion();
+    void scriptSlowCollectOverrides();
+
     void displayCommand();
+    void displayCommandForMenu();
 
     void synchronizeInternalCommands();
 
@@ -288,6 +301,12 @@ private slots:
     void pluginNotInstalled();
 
     void startServerAndRunCommand();
+
+    void avoidStoringPasswords();
+
+    void currentClipboardOwner();
+
+    void saveLargeItem();
 
 private:
     void clearServerErrors();

@@ -11,7 +11,10 @@ public:
 
     void setData(ClipboardMode mode, const QVariantMap &dataMap) override;
 
-    QByteArray clipboardOwner() override;
+    bool isHidden(const QMimeData &data) const override;
+
+protected:
+    void onChanged(int mode) override;
 
 private:
     void clipboardTimeout();

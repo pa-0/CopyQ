@@ -7,6 +7,7 @@
 #include "common/log.h"
 #include "common/settings.h"
 #include "common/textdata.h"
+#include "item/serialize.h"
 #include "platform/platformnativeinterface.h"
 #ifdef Q_OS_UNIX
 #   include "platform/unix/unixsignalhandler.h"
@@ -16,6 +17,7 @@
 #include <QDir>
 #include <QLibraryInfo>
 #include <QLocale>
+#include <QStandardPaths>
 #include <QTranslator>
 #include <QVariant>
 
@@ -43,7 +45,7 @@ void initTests()
     if ( !isTesting() )
         return;
 
-    const QString session = "copyq.test";
+    const QString session = QStringLiteral("copyq.test");
     QCoreApplication::setOrganizationName(session);
     QCoreApplication::setApplicationName(session);
 
@@ -63,7 +65,7 @@ void installTranslator()
 {
     QString locale = QString::fromUtf8( qgetenv("COPYQ_LOCALE") );
     if (locale.isEmpty()) {
-        locale = QSettings().value("Options/language").toString();
+        locale = QSettings().value(QStringLiteral("Options/language")).toString();
         if (locale.isEmpty())
             locale = QLocale::system().name();
         qputenv("COPYQ_LOCALE", locale.toUtf8());
@@ -79,24 +81,24 @@ void installTranslator()
     translationDirectories.prepend(translationPrefix);
 
     // 1. Qt translations
-    installTranslator("qt_" + locale, translationPrefix);
-    installTranslator("qt_" + locale, QLibraryInfo::location(QLibraryInfo::TranslationsPath));
+    installTranslator(QLatin1String("qt_") + locale, translationPrefix);
+    installTranslator(QLatin1String("qt_") + locale, QLibraryInfo::location(QLibraryInfo::TranslationsPath));
 
     // 2. installed translations
-    installTranslator("copyq_" + locale, translationPrefix);
+    installTranslator(QLatin1String("copyq_") + locale, translationPrefix);
 
     // 3. custom translations
     const QByteArray customPath = qgetenv("COPYQ_TRANSLATION_PREFIX");
     if ( !customPath.isEmpty() ) {
         const QString customDir = QDir::fromNativeSeparators( getTextData(customPath) );
-        installTranslator("copyq_" + locale, customDir);
+        installTranslator(QLatin1String("copyq_") + locale, customDir);
         translationDirectories.prepend(customDir);
     }
 
     // 4. compiled, non-installed translations in debug builds
 #ifdef COPYQ_DEBUG
-    const QString compiledTranslations = QCoreApplication::applicationDirPath() + "/src";
-    installTranslator("copyq_" + locale, compiledTranslations);
+    const QString compiledTranslations = QCoreApplication::applicationDirPath() + QLatin1String("/src");
+    installTranslator(QLatin1String("copyq_") + locale, compiledTranslations);
     translationDirectories.prepend(compiledTranslations);
 #endif
 
@@ -120,6 +122,8 @@ App::App(QCoreApplication *application,
     , m_started(false)
     , m_closed(false)
 {
+    registerDataFileConverter();
+
     QObject::connect(m_app, &QCoreApplication::aboutToQuit, [this]() { exit(); });
 
 #ifdef Q_OS_UNIX
@@ -145,6 +149,24 @@ App::App(QCoreApplication *application,
 
     QCoreApplication::setOrganizationName(session);
     QCoreApplication::setApplicationName(session);
+
+    if ( qEnvironmentVariableIsEmpty("COPYQ_ITEM_DATA_PATH") ) {
+        if ( !m_app->property("CopyQ_item_data_path").isValid() ) {
+            m_app->setProperty(
+                "CopyQ_item_data_path",
+                QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+                + QLatin1String("/items"));
+        }
+    } else {
+        m_app->setProperty(
+            "CopyQ_item_data_path",
+#if QT_VERSION >= QT_VERSION_CHECK(5,10,0)
+            qEnvironmentVariable("COPYQ_ITEM_DATA_PATH")
+#else
+            QString::fromLocal8bit(qgetenv("COPYQ_ITEM_DATA_PATH"))
+#endif
+        );
+    }
 
 #ifdef HAS_TESTS
     initTests();

@@ -87,23 +87,21 @@ void registerMetaTypes() {
     qRegisterMetaTypeStreamOperators<ClipboardMode>("ClipboardMode");
     qRegisterMetaTypeStreamOperators<Command>("Command");
     qRegisterMetaTypeStreamOperators<NamedValueList>("NamedValueList");
-    qRegisterMetaTypeStreamOperators<NotificationButtons>("NotificationButtons");
-    qRegisterMetaTypeStreamOperators<ScriptablePath>("ScriptablePath");
+    qRegisterMetaTypeStreamOperators<NotificationButtonList>("NotificationButtonList");
     qRegisterMetaTypeStreamOperators<QVector<int>>("QVector<int>");
     qRegisterMetaTypeStreamOperators<QVector<Command>>("QVector<Command>");
     qRegisterMetaTypeStreamOperators<VariantMapList>("VariantMapList");
-    qRegisterMetaTypeStreamOperators<Qt::KeyboardModifiers>("Qt::KeyboardModifiers");
+    qRegisterMetaTypeStreamOperators<KeyboardModifierList>("KeyboardModifierList");
 #else
     qRegisterMetaType<QPointer<QWidget>>("QPointer<QWidget>");
     qRegisterMetaType<ClipboardMode>("ClipboardMode");
     qRegisterMetaType<Command>("Command");
     qRegisterMetaType<NamedValueList>("NamedValueList");
-    qRegisterMetaType<NotificationButtons>("NotificationButtons");
-    qRegisterMetaType<ScriptablePath>("ScriptablePath");
+    qRegisterMetaType<NotificationButtonList>("NotificationButtonList");
     qRegisterMetaType<QVector<int>>("QVector<int>");
     qRegisterMetaType<QVector<Command>>("QVector<Command>");
     qRegisterMetaType<VariantMapList>("VariantMapList");
-    qRegisterMetaType<Qt::KeyboardModifiers>("Qt::KeyboardModifiers");
+    qRegisterMetaType<KeyboardModifierList>("KeyboardModifierList");
 #endif
 
     registered = true;
@@ -183,24 +181,24 @@ void selectionRemoveInvalid(QList<QPersistentModelIndex> *indexes)
 
 Q_DECLARE_METATYPE(QFile*)
 
-QDataStream &operator<<(QDataStream &out, const NotificationButtons &list)
+QDataStream &operator<<(QDataStream &out, const NotificationButtonList &list)
 {
-    out << list.size();
-    for (const auto &button : list)
+    out << list.items.size();
+    for (const auto &button : list.items)
         out << button.name << button.script << button.data;
     Q_ASSERT(out.status() == QDataStream::Ok);
     return out;
 }
 
-QDataStream &operator>>(QDataStream &in, NotificationButtons &list)
+QDataStream &operator>>(QDataStream &in, NotificationButtonList &list)
 {
-    decltype(list.size()) size;
+    decltype(list.items.size()) size;
     in >> size;
-    list.reserve(size);
+    list.items.reserve(size);
     for (int i = 0; i < size; ++i) {
         NotificationButton button;
         in >> button.name >> button.script >> button.data;
-        list.append(button);
+        list.items.append(button);
     }
     Q_ASSERT(in.status() == QDataStream::Ok);
     return in;
@@ -208,8 +206,8 @@ QDataStream &operator>>(QDataStream &in, NotificationButtons &list)
 
 QDataStream &operator<<(QDataStream &out, const NamedValueList &list)
 {
-    out << list.size();
-    for (const auto &item : list)
+    out << list.items.size();
+    for (const auto &item : list.items)
         out << item.name << item.value;
     Q_ASSERT(out.status() == QDataStream::Ok);
     return out;
@@ -217,13 +215,13 @@ QDataStream &operator<<(QDataStream &out, const NamedValueList &list)
 
 QDataStream &operator>>(QDataStream &in, NamedValueList &list)
 {
-    decltype(list.size()) size;
+    decltype(list.items.size()) size;
     in >> size;
-    list.reserve(size);
+    list.items.reserve(size);
     for (int i = 0; i < size; ++i) {
         NamedValue item;
         in >> item.name >> item.value;
-        list.append(item);
+        list.items.append(item);
     }
     Q_ASSERT(in.status() == QDataStream::Ok);
     return in;
@@ -260,27 +258,17 @@ QDataStream &operator>>(QDataStream &in, ClipboardMode &mode)
     return in;
 }
 
-QDataStream &operator<<(QDataStream &out, const ScriptablePath &path)
+QDataStream &operator<<(QDataStream &out, KeyboardModifierList value)
 {
-    return out << path.path;
+    return out << static_cast<int>(value.items);
 }
 
-QDataStream &operator>>(QDataStream &in, ScriptablePath &path)
-{
-    return in >> path.path;
-}
-
-QDataStream &operator<<(QDataStream &out, Qt::KeyboardModifiers value)
-{
-    return out << static_cast<int>(value);
-}
-
-QDataStream &operator>>(QDataStream &in, Qt::KeyboardModifiers &value)
+QDataStream &operator>>(QDataStream &in, KeyboardModifierList &value)
 {
     int valueInt;
     in >> valueInt;
     Q_ASSERT(in.status() == QDataStream::Ok);
-    value = static_cast<Qt::KeyboardModifiers>(valueInt);
+    value.items = static_cast<Qt::KeyboardModifiers>(valueInt);
     return in;
 }
 
@@ -597,9 +585,9 @@ QWidget *createWidget(const QString &name, const QVariant &value, InputDialog *i
     case QVariant::StringList:
         return createListWidget(name, value.toStringList(), inputDialog);
     default:
-        if ( value.userType() == qMetaTypeId<ScriptablePath>() ) {
-            const auto path = value.value<ScriptablePath>();
-            return createFileNameEdit(name, path.path, parent);
+        if ( value.type() == QVariant::Url ) {
+            const auto path = value.toUrl();
+            return createFileNameEdit(name, path.toLocalFile(), parent);
         }
 
         const QString text = value.toString();
@@ -636,18 +624,6 @@ QString tabNameEmptyError()
     return ScriptableProxy::tr("Tab name cannot be empty!");
 }
 
-void raiseWindow(QPointer<QWidget> window)
-{
-    window->raise();
-    window->activateWindow();
-    QApplication::setActiveWindow(window);
-    QApplication::processEvents();
-    const auto wid = window->winId();
-    const auto platformWindow = platformNativeInterface()->getWindow(wid);
-    if (platformWindow)
-        platformWindow->raise();
-}
-
 } // namespace
 
 #ifdef HAS_TESTS
@@ -677,6 +653,7 @@ public:
         const auto currentWindow = platformNativeInterface()->getCurrentWindow();
         const auto currentWindowTitle = currentWindow ? currentWindow->getTitle() : QString();
         log( QString("Failed to send key press to target widget")
+            + QLatin1String(qApp->applicationState() == Qt::ApplicationActive ? "" : "\nApp is INACTIVE!")
             + "\nExpected: " + (expectedWidgetName.isEmpty() ? "Any" : expectedWidgetName)
             + "\nActual:   " + keyClicksTargetDescription(actual)
             + "\nPopup:    " + keyClicksTargetDescription(popup)
@@ -693,6 +670,16 @@ public:
     {
         auto widget = keyClicksTarget();
         if (!widget) {
+            keyClicksRetry(expectedWidgetName, keys, delay, retry);
+            return;
+        }
+
+        if (qApp->applicationState() != Qt::ApplicationActive) {
+#if defined(Q_OS_MAC) && QT_VERSION >= QT_VERSION_CHECK(6,0,0)
+            // WORKAROUND for focusing back to main window on macOS.
+            if (m_wnd->isVisible())
+                m_wnd->activateWindow();
+#endif
             keyClicksRetry(expectedWidgetName, keys, delay, retry);
             return;
         }
@@ -1282,7 +1269,7 @@ void ScriptableProxy::showMessage(const QString &title,
         const QString &icon,
         int msec,
         const QString &notificationId,
-        const NotificationButtons &buttons)
+        const NotificationButtonList &buttons)
 {
     INVOKE2(showMessage, (title, msg, icon, msec, notificationId, buttons));
 
@@ -1291,7 +1278,7 @@ void ScriptableProxy::showMessage(const QString &title,
     notification->setMessage(msg, Qt::AutoText);
     notification->setIcon(icon);
     notification->setInterval(msec);
-    notification->setButtons(buttons);
+    notification->setButtons(buttons.items);
 }
 
 QVariantMap ScriptableProxy::nextItem(const QString &tabName, int where)
@@ -2093,12 +2080,12 @@ int ScriptableProxy::inputDialog(const NamedValueList &values)
     QIcon icon;
     QVBoxLayout layout(&dialog);
     QWidgetList widgets;
-    widgets.reserve(values.size());
+    widgets.reserve(values.items.size());
 
     QString styleSheet;
     QRect geometry(-1, -1, 0, 0);
 
-    for (const auto &value : values) {
+    for (const auto &value : values.items) {
         if (value.name == ".title")
             dialogTitle = value.value.toString();
         else if (value.name == ".icon")
@@ -2120,6 +2107,10 @@ int ScriptableProxy::inputDialog(const NamedValueList &values)
         else
             widgets.append( createWidget(value.name, value.value, &inputDialog) );
     }
+
+    // WORKAROUND for broken initial focus in Qt 6.6 (QTBUG-121514)
+    if (!widgets.isEmpty())
+        widgets.first()->setFocus();
 
     dialog.adjustSize();
 
@@ -2154,14 +2145,14 @@ int ScriptableProxy::inputDialog(const NamedValueList &values)
             return;
 
         NamedValueList result;
-        result.reserve( widgets.size() );
+        result.items.reserve( widgets.size() );
 
         if ( inputDialog.dialog->result() ) {
             for ( auto w : widgets ) {
                 const QString propertyName = w->property(propertyWidgetProperty).toString();
                 const QString name = w->property(propertyWidgetName).toString();
                 const QVariant value = w->property(propertyName.toUtf8().constData());
-                result.append( NamedValue(name, value) );
+                result.items.append( NamedValue(name, value) );
             }
         }
 
@@ -2186,9 +2177,7 @@ int ScriptableProxy::inputDialog(const NamedValueList &values)
 
     dialog.show();
 
-    // Skip raising dialog in tests.
-    if ( !qApp->property("CopyQ_test_id").isValid() )
-        raiseWindow(&dialog);
+    raiseWindow(&dialog);
 
     return dialogId;
 }
@@ -2309,10 +2298,10 @@ QStringList ScriptableProxy::screenNames()
     return result;
 }
 
-Qt::KeyboardModifiers ScriptableProxy::queryKeyboardModifiers()
+KeyboardModifierList ScriptableProxy::queryKeyboardModifiers()
 {
     INVOKE(queryKeyboardModifiers, ());
-    return QApplication::queryKeyboardModifiers();
+    return {QApplication::queryKeyboardModifiers()};
 }
 
 QPoint ScriptableProxy::pointerPosition()
@@ -2601,6 +2590,12 @@ QStringList ScriptableProxy::styles()
     return QStyleFactory::keys();
 }
 
+void ScriptableProxy::setScriptOverrides(const QVector<int> &overrides)
+{
+    INVOKE2(setScriptOverrides, (overrides));
+    m_wnd->setScriptOverrides(overrides, m_actionId);
+}
+
 ClipboardBrowser *ScriptableProxy::fetchBrowser(const QString &tabName)
 {
     if (tabName.isEmpty()) {
@@ -2703,4 +2698,23 @@ QString themesPath()
 QString translationsPath()
 {
     return platformNativeInterface()->translationPrefix();
+}
+
+void setClipboardMonitorRunning(bool running)
+{
+    QSettings settings(
+          QSettings::IniFormat,
+          QSettings::UserScope,
+          QCoreApplication::organizationName(),
+          QCoreApplication::applicationName() + "-monitor");
+    settings.setValue(QStringLiteral("running"), running);
+}
+bool isClipboardMonitorRunning()
+{
+    const QSettings settings(
+          QSettings::IniFormat,
+          QSettings::UserScope,
+          QCoreApplication::organizationName(),
+          QCoreApplication::applicationName() + "-monitor");
+    return settings.value(QStringLiteral("running")).toBool();
 }

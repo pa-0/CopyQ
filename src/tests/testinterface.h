@@ -5,7 +5,10 @@
 
 #include "common/clipboardmode.h"
 
+#include <QByteArray>
 #include <QStringList>
+#include <QVariant>
+#include <QtContainerFwd>
 
 #include <memory>
 
@@ -59,6 +62,9 @@ public:
     virtual QByteArray waitOnOutput(const QStringList &arguments, const QByteArray &stdoutExpected) = 0;
 
     /// Set clipboard through monitor process.
+    virtual QByteArray setClipboard(const QMap<QString, QVariant> &data, ClipboardMode mode = ClipboardMode::Clipboard) = 0;
+
+    /// Set clipboard through monitor process.
     virtual QByteArray setClipboard(
             const QByteArray &bytes,
             const QString &mime = QLatin1String("text/plain"),
@@ -84,9 +90,6 @@ public:
 
     /// Clean up tabs and items. Return error string on error.
     virtual QByteArray cleanup() = 0;
-
-    /// Ignore given text in logs for current unit test.
-    virtual void setIgnoreError(const QByteArray &ignoreError) = 0;
 
     /// Platform specific key to remove (usually Delete, Backspace on OS X).
     virtual QString shortcutToRemove() = 0;

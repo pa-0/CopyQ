@@ -49,6 +49,7 @@
 #include "platform/platformclipboard.h"
 #include "platform/platformnativeinterface.h"
 #include "platform/platformwindow.h"
+#include "scriptable/scriptoverrides.h"
 
 #ifdef Q_OS_MAC
 #  include "platform/mac/foregroundbackgroundfilter.h"
@@ -71,10 +72,12 @@
 #include <QModelIndex>
 #include <QPushButton>
 #include <QShortcut>
+#include <QSystemTrayIcon>
 #include <QTemporaryFile>
 #include <QTimer>
 #include <QToolBar>
 #include <QUrl>
+#include <QVector>
 
 #include <algorithm>
 #include <memory>
@@ -171,19 +174,30 @@ bool canExecuteCommand(const Command &command, const QVariantMap &data, const QS
     return true;
 }
 
-void stealFocus(const QWidget &window)
-{
-    WId wid = window.winId();
-    PlatformWindowPtr platformWindow = platformNativeInterface()->getWindow(wid);
-    if (platformWindow)
-        platformWindow->raise();
-}
-
 template <typename WidgetOrAction>
 void disableActionWhenTabGroupSelected(WidgetOrAction *action, MainWindow *window)
 {
     QObject::connect( window, &MainWindow::tabGroupSelected,
                       action, &WidgetOrAction::setDisabled );
+}
+
+void addSelectionData(
+        QVariantMap *result,
+        const QList<QPersistentModelIndex> &selectedIndexes)
+{
+    result->insert(mimeSelectedItems, QVariant::fromValue(selectedIndexes));
+}
+
+void addSelectionData(
+        QVariantMap *result,
+        const QModelIndexList &selectedIndexes)
+{
+    QList<QPersistentModelIndex> selected;
+    selected.reserve(selectedIndexes.size());
+    for (const auto &index : selectedIndexes)
+        selected.append(index);
+    std::sort(selected.begin(), selected.end());
+    addSelectionData(result, selected);
 }
 
 /// Adds information about current tab and selection if command is triggered by user.
@@ -202,12 +216,7 @@ QVariantMap addSelectionData(
     }
 
     if ( !selectedIndexes.isEmpty() ) {
-        QList<QPersistentModelIndex> selected;
-        selected.reserve(selectedIndexes.size());
-        for (const auto &index : selectedIndexes)
-            selected.append(index);
-        std::sort(selected.begin(), selected.end());
-        result.insert(mimeSelectedItems, QVariant::fromValue(selected));
+        addSelectionData(&result, selectedIndexes);
     }
 
     return result;
@@ -257,38 +266,34 @@ QMenu *createSubMenus(QString *name, QMenu *menu)
 
 // WORKAROUND: setWindowFlags() hides the window.
 // See: https://doc.qt.io/qt-5/qwidget.html#windowFlags-prop
-bool setWindowFlag(QWidget *window, Qt::WindowType flag, bool enable)
+void setWindowFlag(QPointer<QWidget> window, Qt::WindowType flag, bool enable)
 {
     if (!window)
-        return false;
+        return;
 
     const Qt::WindowFlags flags = window->windowFlags();
     const bool wasEnabled = flags.testFlag(flag);
     if (wasEnabled == enable)
-        return false;
+        return;
 
     const bool wasVisible = window->isVisible();
     const bool wasActive = window->isActiveWindow();
+
     window->setWindowFlags(flags ^ flag);
+
     if (wasVisible) {
         if (wasActive) {
             window->show();
+            window->activateWindow();
+            QApplication::setActiveWindow(window);
+            raiseWindow(window);
         } else {
             const bool showWithoutActivating = window->testAttribute(Qt::WA_ShowWithoutActivating);
             window->setAttribute(Qt::WA_ShowWithoutActivating);
             window->show();
             window->setAttribute(Qt::WA_ShowWithoutActivating, showWithoutActivating);
         }
-
-        if (wasActive) {
-            window->raise();
-            window->activateWindow();
-            QApplication::setActiveWindow(window);
-            stealFocus(*window);
-        }
     }
-
-    return true;
 }
 
 void setAlwaysOnTop(QWidget *window, bool alwaysOnTop)
@@ -399,8 +404,12 @@ void clearActions(QToolBar *toolBar)
 {
     for (QAction *action : toolBar->actions()) {
         // Omit removing action from other menus.
-        if (action->parent() == toolBar)
-            delete action;
+        if (action->parent() == toolBar) {
+            action->setVisible(false);
+            action->setDisabled(true);
+            action->setShortcuts({});
+            action->deleteLater();
+        }
     }
 
     deleteSubMenus(toolBar);
@@ -577,8 +586,8 @@ MainWindow::MainWindow(const ClipboardBrowserSharedPtr &sharedData, QWidget *par
 
     m_sharedData->menuItems = menuItems();
 
-#ifdef Q_OS_MAC
-    // Open above fullscreen windows on OS X.
+#if defined(Q_OS_MAC) && QT_VERSION < QT_VERSION_CHECK(6,0,0)
+    // Open above fullscreen windows on macOS and Qt 5.
     setWindowModality(Qt::WindowModal);
     setWindowFlag(Qt::Sheet);
 #endif
@@ -1064,6 +1073,23 @@ bool MainWindow::isItemPreviewVisible() const
     return m_showItemPreview;
 }
 
+void MainWindow::setScriptOverrides(const QVector<int> &overrides, int actionId)
+{
+    if (!m_actionCollectOverrides || m_actionCollectOverrides->id() != actionId)
+        return;
+
+    m_overrides = overrides;
+    std::sort(m_overrides.begin(), m_overrides.end());
+}
+
+bool MainWindow::isScriptOverridden(int id) const
+{
+    return 
+        // Assume everything is overridden until collectOverrides() finishes
+        (m_actionCollectOverrides && m_actionCollectOverrides->isRunning() && m_overrides.isEmpty())
+        || std::binary_search(m_overrides.begin(), m_overrides.end(), id);
+}
+
 void MainWindow::onAboutToQuit()
 {
     if (cm)
@@ -1093,8 +1119,7 @@ void MainWindow::onItemCommandActionTriggered(CommandAction *commandAction, cons
     if ( !command.cmd.isEmpty() ) {
         if (command.transform) {
             for (const auto &index : selected) {
-                const auto selection = QModelIndexList() << index;
-                auto actionData = addSelectionData(*c, index, selection);
+                auto actionData = addSelectionData(*c, index, {index});
                 if ( !triggeredShortcut.isEmpty() )
                     actionData.insert(mimeShortcut, triggeredShortcut);
                 action(actionData, command, index);
@@ -1242,6 +1267,34 @@ void MainWindow::onBrowserCreated(ClipboardBrowser *browser)
     connect( browser, &ClipboardBrowser::itemWidgetCreated,
              this, &MainWindow::onItemWidgetCreated );
 
+    connect( browser, &ClipboardBrowser::runOnRemoveItemsHandler,
+             browser, [this, browser](const QList<QPersistentModelIndex> &indexes, bool *canRemove) {
+                 if (isScriptOverridden(ScriptOverrides::OnItemsRemoved)) {
+                     QVariantMap data = createDataMap(mimeCurrentTab, browser->tabName());
+                     addSelectionData(&data, indexes);
+                     *canRemove = runEventHandlerScript(QStringLiteral("onItemsRemoved()"), data);
+                 }
+             } );
+    connect( browser->model(), &QAbstractItemModel::rowsInserted,
+             browser, [this, browser](const QModelIndex &, int first, int last) {
+                 if (isScriptOverridden(ScriptOverrides::OnItemsAdded))
+                    runItemHandlerScript(QStringLiteral("onItemsAdded()"), browser, first, last);
+             } );
+    connect( browser->model(), &QAbstractItemModel::dataChanged,
+             browser, [this, browser](const QModelIndex &topLeft, const QModelIndex &bottomRight) {
+                 if (isScriptOverridden(ScriptOverrides::OnItemsChanged)) {
+                    runItemHandlerScript(
+                        QStringLiteral("onItemsChanged()"),
+                        browser, topLeft.row(), bottomRight.row());
+                    }
+             } );
+
+    if (isScriptOverridden(ScriptOverrides::OnItemsLoaded)) {
+        runScript(
+            QStringLiteral("onItemsLoaded()"),
+            createDataMap(mimeCurrentTab, browser->tabName()));
+    }
+
     if (browserOrNull() == browser) {
         const int index = ui->tabWidget->currentIndex();
         tabChanged(index, index);
@@ -1334,7 +1387,7 @@ void MainWindow::runDisplayCommands()
 
     if ( !isInternalActionId(m_displayActionId) ) {
         m_currentDisplayItem = m_displayItemList.takeFirst();
-        const auto action = runScript("runDisplayCommands()", m_currentDisplayItem.data());
+        const auto action = runScript(QStringLiteral("runDisplayCommands()"), m_currentDisplayItem.data());
         m_displayActionId = action->id();
     }
 
@@ -1601,7 +1654,7 @@ void MainWindow::runMenuCommandFilters(MenuMatchCommands *menuMatchCommands, QVa
     if (isRunning) {
         m_sharedData->actions->setActionData(menuMatchCommands->actionId, data);
     } else {
-        const auto act = runScript("runMenuCommandFilters()", data);
+        const auto act = runScript(QStringLiteral("runMenuCommandFilters()"), data);
         menuMatchCommands->actionId = act->id();
     }
 
@@ -1758,7 +1811,7 @@ void MainWindow::updateActionShortcuts()
         const Command &command = act->command();
         QList<QKeySequence> uniqueShortcuts;
 
-        for (const auto &shortcutText : command.shortcuts) {
+        const auto addShortuct = [&](const QString &shortcutText) {
             const QKeySequence shortcut(shortcutText, QKeySequence::PortableText);
             if ( !shortcut.isEmpty() && !usedShortcuts.contains(shortcut) ) {
                 usedShortcuts.append(shortcut);
@@ -1767,7 +1820,12 @@ void MainWindow::updateActionShortcuts()
                 if ( !isItemMenuDefaultActionValid() && isItemActivationShortcut(shortcut) )
                     m_menuItem->setDefaultAction(act);
             }
-        }
+        };
+
+        for (const auto &shortcutText : command.shortcuts)
+            addShortuct(shortcutText);
+        for (const auto &shortcutText : command.globalShortcuts)
+            addShortuct(shortcutText);
 
         if (!uniqueShortcuts.isEmpty())
             act->setShortcuts(uniqueShortcuts);
@@ -1831,8 +1889,14 @@ void MainWindow::addMenuItems(TrayMenu *menu, ClipboardBrowserPlaceholder *place
         const QModelIndex index = c->model()->index(i, 0);
         if ( !searchText.isEmpty() && !menuItemMatches(index, searchText) )
             continue;
-        const QVariantMap data = index.data(contentType::data).toMap();
-        menu->addClipboardItemAction(data, m_options.trayImages);
+        QVariantMap data = index.data(contentType::data).toMap();
+        QAction *act = menu->addClipboardItemAction(data, m_options.trayImages);
+        if ( !m_displayCommands.isEmpty() ) {
+            data.insert(mimeCurrentTab, c->tabName());
+            data.insert(mimeDisplayItemInMenu, QByteArrayLiteral("1"));
+            PersistentDisplayItem item(act, data);
+            onItemWidgetCreated(item);
+        }
         ++itemCount;
     }
 }
@@ -1858,10 +1922,15 @@ void MainWindow::activateMenuItem(ClipboardBrowserPlaceholder *placeholder, cons
 
     PlatformWindowPtr lastWindow = m_windowForMenuPaste;
 
-    if ( m_options.trayItemPaste && lastWindow && !omitPaste && canPaste() ) {
-        COPYQ_LOG( QString("Pasting item from tray menu to \"%1\".")
-                   .arg(lastWindow->getTitle()) );
-        lastWindow->pasteClipboard();
+    if ( m_options.trayItemPaste && !omitPaste && canPaste() ) {
+        if (isScriptOverridden(ScriptOverrides::Paste)) {
+            COPYQ_LOG("Pasting item with paste()");
+            runScript(QStringLiteral("paste()"));
+        } else if (lastWindow) {
+            COPYQ_LOG( QStringLiteral("Pasting item from tray menu to: %1")
+                       .arg(lastWindow->getTitle()) );
+            lastWindow->pasteClipboard();
+        }
     }
 }
 
@@ -1873,13 +1942,7 @@ bool MainWindow::toggleMenu(TrayMenu *menu, QPoint pos)
     }
 
     menu->popup( toScreen(pos, menu) );
-
-    menu->raise();
-    menu->activateWindow();
-    QApplication::setActiveWindow(menu);
-    QApplication::processEvents();
-    stealFocus(*menu);
-
+    raiseWindow(menu);
     return true;
 }
 
@@ -2278,6 +2341,9 @@ void MainWindow::updateEnabledCommands()
 
 void MainWindow::updateCommands(QVector<Command> allCommands, bool forceSave)
 {
+    m_overrides = {};
+    m_actionCollectOverrides = runScript(QStringLiteral("collectScriptOverrides()"));
+
     m_automaticCommands.clear();
     m_menuCommands.clear();
     m_scriptCommands.clear();
@@ -2322,6 +2388,7 @@ void MainWindow::updateCommands(QVector<Command> allCommands, bool forceSave)
 
     updateContextMenu(contextMenuUpdateIntervalMsec);
     updateTrayMenuCommands();
+
     emit commandsSaved(commands);
 }
 
@@ -2374,10 +2441,45 @@ const Theme &MainWindow::theme() const
 Action *MainWindow::runScript(const QString &script, const QVariantMap &data)
 {
     auto act = new Action();
-    act->setCommand(QStringList() << "copyq" << "eval" << "--" << script);
+    act->setCommand(
+        {QStringLiteral("copyq"), QStringLiteral("eval"), QStringLiteral("--"), script});
     act->setData(data);
     runInternalAction(act);
     return act;
+}
+
+bool MainWindow::runEventHandlerScript(const QString &script, const QVariantMap &data)
+{
+    if (m_maxEventHandlerScripts == 0)
+        return false;
+
+    --m_maxEventHandlerScripts;
+    if (m_maxEventHandlerScripts == 0)
+        log("Event handler maximum recursion reached", LogWarning);
+
+    const auto action = runScript(script, data);
+    const bool hasUpdatesEnabled = updatesEnabled();
+    setUpdatesEnabled(false);
+    action->waitForFinished();
+    setUpdatesEnabled(hasUpdatesEnabled);
+    ++m_maxEventHandlerScripts;
+    return !action->actionFailed() && action->exitCode() == 0;
+}
+
+void MainWindow::runItemHandlerScript(
+    const QString &script, const ClipboardBrowser *browser, int firstRow, int lastRow)
+{
+     QList<QPersistentModelIndex> indexes;
+     indexes.reserve(lastRow - firstRow + 1);
+     for (int row = firstRow; row <= lastRow; ++row) {
+        const auto index = browser->model()->index(row, 0);
+        if (index.isValid())
+            indexes.append(index);
+     }
+
+     QVariantMap data = createDataMap(mimeCurrentTab, browser->tabName());
+     addSelectionData(&data, indexes);
+     runScript(script, data);
 }
 
 int MainWindow::findTabIndex(const QString &name)
@@ -2500,6 +2602,11 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
 
     // Allow browsing items in search mode without focusing item list.
     if ( c && ui->searchBar->hasFocus() ) {
+        if ( event->matches(QKeySequence::Copy) && ui->searchBar->selectionLength() == 0 ) {
+            copyItems();
+            return;
+        }
+
         switch(key) {
             case Qt::Key_Down:
             case Qt::Key_Up:
@@ -2774,8 +2881,6 @@ void MainWindow::showWindow()
         showMaximized();
     else
         showNormal();
-    raise();
-    activateWindow();
 
     auto c = browser();
     if (c) {
@@ -2784,9 +2889,7 @@ void MainWindow::showWindow()
         c->setFocus();
     }
 
-    QApplication::setActiveWindow(this);
-
-    stealFocus(*this);
+    raiseWindow(this);
 }
 
 void MainWindow::hideWindow()
@@ -2864,7 +2967,7 @@ void MainWindow::onTrayActionTriggered(const QVariantMap &data, bool omitPaste)
     activateMenuItem( getPlaceholderForTrayMenu(), data, omitPaste );
 }
 
-void MainWindow::trayActivated(QSystemTrayIcon::ActivationReason reason)
+void MainWindow::trayActivated(int reason)
 {
 #ifdef Q_OS_MAC
     if (!m_options.nativeTrayMenu && reason == QSystemTrayIcon::Context) {
@@ -2938,7 +3041,7 @@ void MainWindow::tabChanged(int current, int)
 
     if (!currentIsTabGroup) {
         // update item menu (necessary for keyboard shortcuts to work)
-        auto c = browserOrNull();
+        auto c = browser();
         if (c) {
             c->filterItems( browseMode() ? nullptr : ui->searchBar->filter() );
 
@@ -2949,6 +3052,12 @@ void MainWindow::tabChanged(int current, int)
             }
 
             setTabOrder(ui->searchBar, c);
+
+            if (isScriptOverridden(ScriptOverrides::OnTabSelected)) {
+                runEventHandlerScript(
+                    QStringLiteral("onTabSelected()"),
+                    createDataMap(mimeCurrentTab, c->tabName()));
+            }
         }
     }
 
@@ -3279,8 +3388,8 @@ void MainWindow::activateCurrentItemHelper()
 
     // Perform custom actions on item activation.
     PlatformWindowPtr lastWindow = m_windowForMainPaste;
-    const bool paste = lastWindow && m_options.activatePastes() && canPaste();
-    const bool activateWindow = paste || (lastWindow && m_options.activateFocuses());
+    const bool paste = m_options.activatePastes() && canPaste();
+    const bool activateWindow = m_options.activateFocuses();
 
     // Copy current item or selection to clipboard.
     // While clipboard is being set (in separate process)
@@ -3290,15 +3399,20 @@ void MainWindow::activateCurrentItemHelper()
     if ( m_options.activateCloses() )
         hideWindow();
 
-    if (activateWindow)
+    if (lastWindow && activateWindow)
         lastWindow->raise();
 
     enterBrowseMode();
 
     if (paste) {
-        COPYQ_LOG( QString("Pasting item from main window to \"%1\".")
-                   .arg(lastWindow->getTitle()) );
-        lastWindow->pasteClipboard();
+        if (isScriptOverridden(ScriptOverrides::Paste)) {
+            COPYQ_LOG("Pasting item with paste()");
+            runScript(QStringLiteral("paste()"));
+        } else if (lastWindow) {
+            COPYQ_LOG( QStringLiteral("Pasting item from main window to: %1")
+                       .arg(lastWindow->getTitle()) );
+            lastWindow->pasteClipboard();
+        }
     }
 }
 
@@ -3326,7 +3440,7 @@ void MainWindow::disableClipboardStoring(bool disable)
 
     updateIcon();
 
-    runScript("setTitle(); showDataNotification()");
+    runScript(QStringLiteral("setTitle(); showDataNotification()"));
 
     COPYQ_LOG( QString("Clipboard monitoring %1.")
                .arg(m_clipboardStoringDisabled ? "disabled" : "enabled") );
@@ -3571,7 +3685,7 @@ ActionDialog *MainWindow::openActionDialog(const QVariantMap &data)
     connect( actionDialog, &ActionDialog::commandAccepted,
              this, &MainWindow::onActionDialogAccepted );
 
-    stealFocus(*actionDialog);
+    raiseWindow(actionDialog);
 
     return actionDialog;
 }

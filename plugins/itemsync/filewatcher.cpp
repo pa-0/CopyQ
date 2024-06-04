@@ -29,6 +29,79 @@ const QLatin1String mimePrivatePrefix(COPYQ_MIME_PREFIX_ITEMSYNC_PRIVATE);
 const QLatin1String mimeOldBaseName(COPYQ_MIME_PREFIX_ITEMSYNC_PRIVATE "old-basename");
 const QLatin1String mimeHashPrefix(COPYQ_MIME_PREFIX_ITEMSYNC_PRIVATE "hash");
 
+class SyncDataFile {
+public:
+    SyncDataFile() = default;
+
+    explicit SyncDataFile(const QString &path, const QString &format = QString())
+        : m_path(path)
+        , m_format(format)
+    {}
+
+    const QString &path() const { return m_path; }
+    void setPath(const QString &path) { m_path = path; }
+
+    const QString &format() const { return m_format; }
+    void setFormat(const QString &format) { m_format = format; }
+
+    qint64 size() const {
+        QFileInfo f(m_path);
+        return f.size();
+    }
+
+    QByteArray readAll() const
+    {
+        COPYQ_LOG_VERBOSE( QStringLiteral("ItemSync: Reading file: %1").arg(m_path) );
+
+        QFile f(m_path);
+        if ( !f.open(QIODevice::ReadOnly) )
+            return QByteArray();
+
+        if ( m_format.isEmpty() )
+            return f.readAll();
+
+        QDataStream stream(&f);
+        QVariantMap dataMap;
+        if ( !deserializeData(&stream, &dataMap) ) {
+            log( QStringLiteral("ItemSync: Failed to read file \"%1\": %2")
+                    .arg(m_path, f.errorString()), LogError );
+            return QByteArray();
+        }
+
+        return dataMap.value(m_format).toByteArray();
+    }
+
+private:
+    QString m_path;
+    QString m_format;
+};
+Q_DECLARE_METATYPE(SyncDataFile)
+
+QDataStream &operator<<(QDataStream &out, SyncDataFile value)
+{
+    return out << value.path() << value.format();
+}
+
+QDataStream &operator>>(QDataStream &in, SyncDataFile &value)
+{
+    QString path;
+    QString format;
+    in >> path >> format;
+    value.setPath(path);
+    value.setFormat(format);
+    return in;
+}
+
+void registerSyncDataFileConverter()
+{
+    QMetaType::registerConverter(&SyncDataFile::readAll);
+#if QT_VERSION < QT_VERSION_CHECK(6,0,0)
+    qRegisterMetaTypeStreamOperators<SyncDataFile>("SyncDataFile");
+#else
+    qRegisterMetaType<SyncDataFile>("SyncDataFile");
+#endif
+}
+
 struct Ext {
     Ext() : extension(), format() {}
 
@@ -61,7 +134,7 @@ const QLatin1String noteFileSuffix("_note.txt");
 const int defaultUpdateFocusItemsIntervalMs = 10000;
 const int batchItemUpdateIntervalMs = 100;
 
-const qint64 sizeLimit = 10 << 20;
+const qint64 sizeLimit = 50'000'000;
 
 FileFormat getFormatSettingsFromFileName(const QString &fileName,
                                          const QList<FileFormat> &formatSettings,
@@ -146,6 +219,10 @@ Ext findByExtension(const QString &fileName, const QList<FileFormat> &formatSett
     // Is internal data format?
     if ( fileName.endsWith(dataFileSuffix) )
         return Ext(dataFileSuffix, mimeUnknownFormats);
+
+    // Avoid conflicting notes with text.
+    if ( fileName.endsWith(noteFileSuffix) )
+        return Ext(noteFileSuffix, mimeItemNotes);
 
     // Find in user defined formats.
     bool hasUserFormat = false;
@@ -421,6 +498,7 @@ FileWatcher::FileWatcher(
         QAbstractItemModel *model,
         int maxItems,
         const QList<FileFormat> &formatSettings,
+        int itemDataThreshold,
         QObject *parent)
     : QObject(parent)
     , m_model(model)
@@ -428,6 +506,7 @@ FileWatcher::FileWatcher(
     , m_path(path)
     , m_valid(true)
     , m_maxItems(maxItems)
+    , m_itemDataThreshold(itemDataThreshold)
 {
     m_updateTimer.setSingleShot(true);
 
@@ -448,7 +527,7 @@ FileWatcher::FileWatcher(
              this, &FileWatcher::onDataChanged );
 
     if (model->rowCount() > 0)
-        saveItems(0, model->rowCount() - 1);
+        saveItems(0, model->rowCount() - 1, UpdateType::Inserted);
 
     prependItemsFromFiles( QDir(path), listFiles(paths, m_formatSettings, m_maxItems) );
 }
@@ -653,12 +732,12 @@ void FileWatcher::setUpdatesEnabled(bool enabled)
 
 void FileWatcher::onRowsInserted(const QModelIndex &, int first, int last)
 {
-    saveItems(first, last);
+    saveItems(first, last, UpdateType::Inserted);
 }
 
 void FileWatcher::onDataChanged(const QModelIndex &a, const QModelIndex &b)
 {
-    saveItems(a.row(), b.row());
+    saveItems(a.row(), b.row(), UpdateType::Changed);
 }
 
 void FileWatcher::onRowsRemoved(const QModelIndex &, int first, int last)
@@ -776,7 +855,7 @@ QList<QPersistentModelIndex> FileWatcher::indexList(int first, int last)
     return indexList;
 }
 
-void FileWatcher::saveItems(int first, int last)
+void FileWatcher::saveItems(int first, int last, UpdateType updateType)
 {
     if ( !lock() )
         return;
@@ -795,7 +874,7 @@ void FileWatcher::saveItems(int first, int last)
         return;
     }
 
-    if ( !renameMoveCopy(dir, indexList) )
+    if ( !renameMoveCopy(dir, indexList, updateType) )
         return;
 
     QStringList existingFiles = listFiles(dir);
@@ -873,7 +952,8 @@ void FileWatcher::saveItems(int first, int last)
     unlock();
 }
 
-bool FileWatcher::renameMoveCopy(const QDir &dir, const QList<QPersistentModelIndex> &indexList)
+bool FileWatcher::renameMoveCopy(
+    const QDir &dir, const QList<QPersistentModelIndex> &indexList, UpdateType updateType)
 {
     QStringList baseNames;
 
@@ -881,11 +961,14 @@ bool FileWatcher::renameMoveCopy(const QDir &dir, const QList<QPersistentModelIn
         if ( !index.isValid() )
             continue;
 
-        const QString olderBaseName = oldBaseName(index);
+        QString olderBaseName = oldBaseName(index);
         const QString oldBaseName = getBaseName(index);
+        if (updateType == UpdateType::Changed && olderBaseName.isEmpty())
+            olderBaseName = oldBaseName;
+
         QString baseName = oldBaseName;
 
-        bool newItem = olderBaseName.isEmpty();
+        bool newItem = updateType != UpdateType::Changed && olderBaseName.isEmpty();
         bool itemRenamed = olderBaseName != baseName;
         if ( newItem || itemRenamed ) {
             if ( !renameToUnique(dir, baseNames, &baseName, m_formatSettings) )
@@ -935,18 +1018,38 @@ void FileWatcher::updateDataAndWatchFile(const QDir &dir, const BaseNameExtensio
 
         const QString fileName = basePath + ext.extension;
 
-        QFile f( dir.absoluteFilePath(fileName) );
+        const QString path = dir.absoluteFilePath(fileName);
+        QFile f(path);
         if ( !f.open(QIODevice::ReadOnly) )
             continue;
 
         if ( ext.extension == dataFileSuffix ) {
             QDataStream stream(&f);
-            if ( deserializeData(&stream, dataMap) )
+            QVariantMap dataMap2;
+            if ( deserializeData(&stream, &dataMap2) ) {
+                for (auto it = dataMap2.constBegin(); it != dataMap2.constEnd(); ++it) {
+                    const QVariant &value = it.value();
+                    const qint64 size = value.type() == QVariant::ByteArray
+                        ? value.toByteArray().size()
+                        : value.value<SyncDataFile>().size();
+                    if (m_itemDataThreshold >= 0 && size > m_itemDataThreshold) {
+                        const QVariant syncDataFile = QVariant::fromValue(SyncDataFile(path, it.key()));
+                        dataMap->insert(it.key(), syncDataFile);
+                    } else {
+                        dataMap->insert(it.key(), value);
+                    }
+                }
+
                 mimeToExtension->insert(mimeUnknownFormats, dataFileSuffix);
+            }
         } else if ( f.size() > sizeLimit || ext.format.startsWith(mimeNoFormat)
                     || dataMap->contains(ext.format) )
         {
             mimeToExtension->insert(mimeNoFormat + ext.extension, ext.extension);
+        } else if ( m_itemDataThreshold >= 0 && f.size() > m_itemDataThreshold ) {
+            const QVariant value = QVariant::fromValue(SyncDataFile(path));
+            dataMap->insert(ext.format, value);
+            mimeToExtension->insert(ext.format, ext.extension);
         } else {
             dataMap->insert(ext.format, f.readAll());
             mimeToExtension->insert(ext.format, ext.extension);

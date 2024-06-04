@@ -84,7 +84,7 @@ protected:
     QVariant retrieveData(const QString &mimeType, QVariant::Type preferredType) const override
 #endif
     {
-        COPYQ_LOG_VERBOSE( QString("Providing \"%1\"").arg(mimeType) );
+        COPYQ_LOG_VERBOSE( QStringLiteral("Providing \"%1\"").arg(mimeType) );
         return QMimeData::retrieveData(mimeType, preferredType);
     }
 };
@@ -94,10 +94,11 @@ class ClipboardDataGuard final {
 public:
     class ElapsedGuard {
     public:
-        explicit ElapsedGuard(const QString &format)
-            : m_format(format)
+        explicit ElapsedGuard(const QString &type, const QString &format)
+            : m_type(type)
+            , m_format(format)
         {
-            COPYQ_LOG_VERBOSE( QString("Accessing \"%1\"").arg(format) );
+            COPYQ_LOG_VERBOSE( QStringLiteral("Accessing [%1:%2]").arg(type, format) );
             m_elapsed.start();
         }
 
@@ -105,9 +106,10 @@ public:
         {
             const auto t = m_elapsed.elapsed();
             if (t > 500)
-                log( QString("ELAPSED %1 ms accessing \"%2\"").arg(t).arg(m_format), LogWarning );
+                log( QStringLiteral("ELAPSED %1 ms accessing [%2:%3]").arg(t).arg(m_type, m_format), LogWarning );
         }
     private:
+        QString m_type;
         QString m_format;
         QElapsedTimer m_elapsed;
     };
@@ -119,53 +121,66 @@ public:
         m_timerExpire.start();
     }
 
+    QStringList formats()
+    {
+        ElapsedGuard _(QStringLiteral(), QStringLiteral("formats"));
+        return refresh() ? m_dataGuard->formats() : QStringList();
+    }
+
     bool hasFormat(const QString &mime)
     {
-        ElapsedGuard _("has:" + mime);
+        ElapsedGuard _(QStringLiteral("hasFormat"), mime);
         return refresh() && m_dataGuard->hasFormat(mime);
     }
 
     QByteArray data(const QString &mime)
     {
-        ElapsedGuard _(mime);
+        ElapsedGuard _(QStringLiteral("data"), mime);
         return refresh() ? m_dataGuard->data(mime) : QByteArray();
     }
 
     QList<QUrl> urls()
     {
-        ElapsedGuard _("urls");
+        ElapsedGuard _(QStringLiteral(), QStringLiteral("urls"));
         return refresh() ? m_dataGuard->urls() : QList<QUrl>();
     }
 
     QString text()
     {
-        ElapsedGuard _("text");
+        ElapsedGuard _(QStringLiteral(), QStringLiteral("text"));
         return refresh() ? m_dataGuard->text() : QString();
     }
 
     bool hasText()
     {
-        ElapsedGuard _("hasText");
+        ElapsedGuard _(QStringLiteral(), QStringLiteral("hasText"));
         return refresh() && m_dataGuard->hasText();
     }
 
     QImage getImageData()
     {
-        ElapsedGuard _("imageData");
+        ElapsedGuard _(QStringLiteral(), QStringLiteral("imageData"));
         if (!refresh())
             return QImage();
 
         // NOTE: Application hangs if using multiple sessions and
         //       calling QMimeData::hasImage() on X11 clipboard.
-        COPYQ_LOG_VERBOSE("Fetching image data from clipboard");
-        const QImage image = m_dataGuard->imageData().value<QImage>();
-        COPYQ_LOG_VERBOSE( QString("Image is %1").arg(image.isNull() ? "invalid" : "valid") );
+        QImage image = m_dataGuard->imageData().value<QImage>();
+        if ( image.isNull() ) {
+            image.loadFromData( data(QStringLiteral("image/png")), "png" );
+            if ( image.isNull() ) {
+                image.loadFromData( data(QStringLiteral("image/bmp")), "bmp" );
+            }
+        }
+        COPYQ_LOG_VERBOSE(
+            QStringLiteral("Image is %1")
+            .arg(image.isNull() ? QStringLiteral("invalid") : QStringLiteral("valid")) );
         return image;
     }
 
     QByteArray getUtf8Data(const QString &format)
     {
-        ElapsedGuard _("UTF8:" + format);
+        ElapsedGuard _(QStringLiteral("UTF8"), format);
         if (!refresh())
             return QByteArray();
 
@@ -199,7 +214,7 @@ private:
 
         const auto elapsed = m_timerExpire.elapsed();
         if (elapsed > 5000) {
-            log("Clipboard data expired, refusing to access old data", LogWarning);
+            log(QStringLiteral("Clipboard data expired, refusing to access old data"), LogWarning);
             m_dataGuard = nullptr;
             return false;
         }
@@ -221,9 +236,8 @@ private:
 
 QString getImageFormatFromMime(const QString &mime)
 {
-    const auto imageMimePrefix = "image/";
-    const auto prefixLength = static_cast<int>(strlen(imageMimePrefix));
-    return mime.startsWith(imageMimePrefix) ? mime.mid(prefixLength) : QString();
+    static const QString imageMimePrefix = QStringLiteral("image/");
+    return mime.startsWith(imageMimePrefix) ? mime.mid(imageMimePrefix.length()) : QString();
 }
 
 /**
@@ -244,9 +258,9 @@ void cloneImageData(
     QBuffer buffer;
     bool saved = image.save(&buffer, format.toUtf8().constData());
 
-    COPYQ_LOG( QString("Converting image to \"%1\" format: %2")
+    COPYQ_LOG( QStringLiteral("Converting image to \"%1\" format: %2")
                .arg(format,
-                    saved ? "Done" : "Failed") );
+                    saved ? QStringLiteral("Done") : QStringLiteral("Failed")) );
 
     if (saved)
         dataMap->insert(mime, buffer.buffer());
@@ -262,29 +276,29 @@ bool canCloneImageData(const QImage &image)
         && image.width() <= 4096;
 }
 
-bool setImageData(const QVariantMap &data, const QString &mime, QMimeData *mimeData)
+bool setImageData(
+    QByteArray &bytes, const char *imageFormat, const std::unique_ptr<QMimeData> &mimeData)
 {
-    if ( !data.contains(mime) )
-        return false;
-
-    const QString imageFormat = getImageFormatFromMime(mime);
-    if ( imageFormat.isEmpty() )
-        return false;
-
-    QByteArray bytes = data.value(mime).toByteArray();
-
     // Omit converting animated images to static ones.
     QBuffer buffer(&bytes);
-    QMovie animatedImage( &buffer, imageFormat.toUtf8().constData() );
+    const QMovie animatedImage(&buffer, imageFormat);
     if ( animatedImage.frameCount() > 1 )
         return false;
 
-    const QImage image = QImage::fromData( bytes, imageFormat.toUtf8().constData() );
+    const QImage image = QImage::fromData(bytes, imageFormat);
     if ( image.isNull() )
         return false;
 
     mimeData->setImageData(image);
     return true;
+}
+
+bool setImageData(
+    const QVariantMap &data, const QString &mime, const char *imageFormat, const std::unique_ptr<QMimeData> &mimeData)
+{
+    QByteArray imageData = data.value(mime).toByteArray();
+    return !imageData.isEmpty()
+        && setImageData(imageData, imageFormat, mimeData);
 }
 
 Encoding encodingForName(const char *name)
@@ -334,17 +348,8 @@ bool isBinaryImageFormat(const QString &format)
            && !format.contains(QStringLiteral("svg"));
 }
 
-} // namespace
-
-bool isMainThread()
+QVariantMap cloneData(ClipboardDataGuard &data, QStringList &formats)
 {
-    return QThread::currentThread() == qApp->thread();
-}
-
-QVariantMap cloneData(const QMimeData &rawData, QStringList formats, bool *abortCloning)
-{
-    ClipboardDataGuard data(rawData, abortCloning);
-
     QVariantMap newdata;
 
     /*
@@ -394,8 +399,19 @@ QVariantMap cloneData(const QMimeData &rawData, QStringList formats, bool *abort
     return newdata;
 }
 
-QVariantMap cloneData(const QMimeData &data)
+} // namespace
+
+QVariantMap cloneData(const QMimeData &rawData, QStringList formats, bool *abortCloning)
 {
+    ClipboardDataGuard data(rawData, abortCloning);
+    return cloneData(data, formats);
+}
+
+QVariantMap cloneData(const QMimeData &rawData)
+{
+    bool abortCloning = false;
+    ClipboardDataGuard data(rawData, &abortCloning);
+
     static const QSet<QString> ignoredFormats({
         mimeOwner,
         mimeClipboardMode,
@@ -406,26 +422,44 @@ QVariantMap cloneData(const QMimeData &data)
         mimeOutputTab,
     });
 
+    const QStringList availableFormats = data.formats();
+
     QStringList formats;
 
-    for ( const auto &mime : data.formats() ) {
+    bool skipBinaryImages = formats.contains(mimeText) && data.hasText();
+    if (!skipBinaryImages && availableFormats.contains(QStringLiteral("image/png")) ) {
+        formats.append(QStringLiteral("image/png"));
+        if ( availableFormats.contains(QStringLiteral("image/webp")) )
+            formats.append(QStringLiteral("image/webp"));
+        if ( availableFormats.contains(QStringLiteral("image/gif")) )
+            formats.append(QStringLiteral("image/gif"));
+        skipBinaryImages = true;
+    }
+
+    for (const auto &mime : availableFormats) {
         // ignore uppercase mimetypes (e.g. UTF8_STRING, TARGETS, TIMESTAMP)
         // and specific internal types
-        if ( !mime.isEmpty() && mime[0].isLower() && !ignoredFormats.contains(mime) )
-            formats.append(mime);
+        if ( mime.isEmpty() || !mime[0].isLower() || ignoredFormats.contains(mime) )
+            continue;
+
+        // ignore redundant image formats
+        if ( skipBinaryImages && isBinaryImageFormat(mime) )
+            continue;
+
+        formats.append(mime);
     }
 
     if ( !formats.contains(mimeText) ) {
-        const QString textPrefix(QLatin1String(mimeText) + ";");
-        bool containsText = false;
-        for (int i = formats.size() - 1; i >= 0; --i) {
-            if ( formats[i].startsWith(textPrefix) ) {
-                formats.removeAt(i);
-                containsText = true;
+        const QString textPrefix(mimeText + QStringLiteral(";"));
+        const auto first = std::remove_if(
+            std::begin(formats), std::end(formats), [&](const QString &format){
+                return format.startsWith(textPrefix);
             }
-        }
-        if (containsText)
+        );
+        if (first != std::end(formats)) {
+            formats.erase(first, std::end(formats));
             formats.append(mimeText);
+        }
     }
 
     return cloneData(data, formats);
@@ -433,26 +467,36 @@ QVariantMap cloneData(const QMimeData &data)
 
 QMimeData* createMimeData(const QVariantMap &data)
 {
-    QStringList copyFormats = data.keys();
-    copyFormats.removeOne(mimeClipboardMode);
-
     std::unique_ptr<QMimeData> newClipboardData(new MimeData);
 
-    for ( const auto &format : copyFormats )
-        newClipboardData->setData( format, data[format].toByteArray() );
+    bool hasImage =
+        setImageData(data, QStringLiteral("image/png"), "png", newClipboardData)
+        || setImageData(data, QStringLiteral("image/bmp"), "bmp", newClipboardData)
+        || setImageData(data, QStringLiteral("application/x-qt-image"), nullptr, newClipboardData)
+    ;
 
-    if ( !copyFormats.contains(mimeOwner) ) {
+    for (auto it = data.constBegin(); it != data.constEnd(); ++it) {
+        if ( it.key() == mimeClipboardMode )
+            continue;
+
+        QByteArray bytes = it.value().toByteArray();
+
+        newClipboardData->setData( it.key(), bytes );
+
+        if (!hasImage) {
+            const QString imageFormat = getImageFormatFromMime(it.key());
+            if ( !imageFormat.isEmpty()
+                && setImageData(bytes, imageFormat.toUtf8().constData(), newClipboardData) )
+            {
+                hasImage = true;
+            }
+        }
+    }
+
+    if ( !data.contains(mimeOwner) ) {
         const auto owner = makeClipboardOwnerData();
         if ( !owner.isEmpty() )
             newClipboardData->setData( mimeOwner, owner );
-    }
-
-    // Set image data.
-    const QStringList formats =
-            QStringList() << "image/png" << "image/bmp" << "application/x-qt-image" << data.keys();
-    for (const auto &imageFormat : formats) {
-        if ( setImageData(data, imageFormat, newClipboardData.get()) )
-            break;
     }
 
     return newClipboardData.release();
